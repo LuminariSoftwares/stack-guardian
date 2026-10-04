@@ -1,0 +1,19 @@
+{
+  "name": "dsh-stack-guardian",
+  "version": "0.1.0-alpha.1",
+  "description": "stack-guardian for the DeepSeek Harness: one start-of-session line when the stack doctor reports WARN/FAIL.",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js"
+  ],
+  "license": "MIT",
+  "author": "LuminariSoftwares",
+  "engines": {
+    "node": ">=20"
+  }
+}

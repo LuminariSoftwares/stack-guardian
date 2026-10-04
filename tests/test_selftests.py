@@ -5,7 +5,7 @@ import sys
 
 import pytest
 
-MODULES = ["finding", "parsers", "core", "state", "cli", "collect", "mcp_server", "multinode", "serve"]
+MODULES = ["finding", "parsers", "core", "state", "cli", "collect", "mcp_server", "multinode", "serve", "fixes"]
 
 
 @pytest.mark.parametrize("mod", MODULES)
@@ -81,3 +81,16 @@ def test_mcp_stdio_end_to_end(tmp_path):
     assert [t["name"] for t in out[2]["result"]["tools"]] == ["stack_health", "stack_snapshot", "explain"]
     body = json.loads(out[3]["result"]["content"][0]["text"])
     assert any(f["code"] == "ollama.unreachable" and f["node"] == "lab" for f in body["findings"]), body
+
+
+def test_dsh_plugin_selftest():
+    """P43 S6: the DSH plugin (dsh/index.js) passes its own node selftest."""
+    import os
+    import shutil
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is not on PATH")
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    r = subprocess.run([node, os.path.join(here, "dsh", "index.js"), "--selftest"], capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0, r.stdout[-2000:] + r.stderr[-2000:]
+    assert " 0 failed" in r.stdout
