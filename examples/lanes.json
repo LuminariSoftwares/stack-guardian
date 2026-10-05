@@ -1,0 +1,5 @@
+{
+  "lanes": {
+    "atlas_ollama": ["python", "-c", "print('pretend restart of the atlas Ollama lane')"]
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "schema": 1,
+  "nodes": {
+    "atlas": {
+      "reachable": false,
+      "latency_ms": null,
+      "ollama": [{"url": "http://127.0.0.1:11434", "error": "ConnectionError: refused", "running": []}]
+    }
+  }
+}
