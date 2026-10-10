@@ -1,0 +1,4 @@
+{
+  "atlas": {"ollama": ["http://127.0.0.1:11434"], "local": true},
+  "node2": {"ollama": ["http://100.64.0.2:11434"], "tailnet_host": "node2"}
+}

@@ -1,0 +1,4 @@
+{
+  "expect": {"atlas": {"model": "qwen3-coder:30b"}},
+  "vram_unattributed_mib": 2048
+}

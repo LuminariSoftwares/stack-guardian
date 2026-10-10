@@ -2,19 +2,24 @@ import argparse
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
+import urllib.error
+import urllib.request
 from datetime import datetime, timezone
 
 try:
     from . import collect as sg_collect
     from . import core as sg_core
     from . import finding as sg_finding
+    from . import fixes as sg_fixes
     from . import state as sg_state
 except ImportError:  # run as a plain file next to the sg_* modules
     import sg_collect
     import sg_core
     import sg_finding
+    import sg_fixes
     import sg_state
 
 # The rules shipped with the package (P43 S3); --checks-dir points elsewhere.
@@ -54,6 +59,90 @@ def doctor(checks_dir, snapshot, state_path=None, at=None, ctx=None):
     return graded, sg_finding.exit_code(graded)
 
 
+def _state_dir(state_path):
+    """Folder holding snapshots/, fixes.jsonl and env next to the state file."""
+    return os.path.dirname(os.path.abspath(state_path)) if state_path else os.path.dirname(os.path.abspath(sg_state.state_path()))
+
+
+def real_deps(snapshot, state_dir, audit_path=None, http_timeout=10, run_timeout=120):
+    """The real dependencies fixes.apply_fix needs. Everything that touches the world lives here, in the CLI layer."""
+    state_dir = os.fspath(state_dir)
+    audit_path = audit_path or os.path.join(state_dir, "fixes.jsonl")
+
+    def save_snapshot(obj):
+        folder = os.path.join(state_dir, "snapshots")
+        os.makedirs(folder, exist_ok=True)
+        name = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ") + ".json"
+        path = os.path.join(folder, name)
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(obj, fh, indent=1)
+        return path
+
+    def http(method, url, body):
+        data = json.dumps(body).encode("utf-8") if body is not None else None
+        req = urllib.request.Request(url, data=data, method=method, headers={"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=http_timeout) as resp:  # noqa: S310 - fixes.validate_fix only allows http(s)
+                return resp.status
+        except urllib.error.HTTPError as exc:
+            return exc.code
+        except (urllib.error.URLError, OSError):
+            return 0
+
+    def run(argv):
+        try:  # argv is a list from a declared lane: never a shell string
+            return subprocess.run(list(argv), capture_output=True, timeout=run_timeout, shell=False).returncode  # noqa: S603
+        except (OSError, subprocess.SubprocessError):
+            return 127
+
+    def set_env(name, value):
+        """Persist NAME=value in <state dir>/env (replacing any earlier line) and set it for this process."""
+        path = os.path.join(state_dir, "env")
+        try:
+            os.makedirs(state_dir, exist_ok=True)
+            kept = []
+            if os.path.isfile(path):
+                with open(path, encoding="utf-8") as fh:
+                    kept = [ln for ln in fh.read().splitlines() if not ln.startswith(name + "=")]
+            kept.append("%s=%s" % (name, value))
+            with open(path, "w", encoding="utf-8", newline="\n") as fh:
+                fh.write("\n".join(kept) + "\n")
+        except OSError:
+            return False
+        os.environ[name] = value
+        return True
+
+    def audit(line):
+        os.makedirs(os.path.dirname(os.path.abspath(audit_path)), exist_ok=True)
+        with open(audit_path, "a", encoding="utf-8", newline="\n") as fh:
+            fh.write(line + "\n")
+
+    return {"snapshot": lambda: snapshot, "save_snapshot": save_snapshot, "http": http, "run": run, "set_env": set_env,
+            "audit": audit, "now": lambda: datetime.now(timezone.utc).isoformat(timespec="seconds")}
+
+
+def pick_fix_finding(findings, ident):
+    """(finding, error): ident is a finding code, or code@node when several nodes raise the same code."""
+    code, _, node = ident.partition("@")
+    hits = [f for f in findings if f.get("code") == code and (not node or f.get("node") == node)]
+    if not hits:
+        return None, "no finding %s in this run" % ident
+    with_fix = [f for f in hits if f.get("fix")]
+    if not with_fix:
+        return None, "finding %s carries no fix" % ident
+    if len(with_fix) > 1:
+        return None, "finding %s is raised on several nodes (%s); use code@node" % (code, ", ".join(sorted(f.get("node", "") for f in with_fix)))
+    return with_fix[0], ""
+
+
+def _render_fix(ident, result):
+    if not result["ok"] and not result.get("applied"):
+        return "fix %s refused: %s" % (ident, result.get("error", "unknown"))
+    if not result.get("applied"):
+        return "fix %s (dry run, add --apply to perform): %s" % (ident, result["plan"]["describe"])
+    return "fix %s %s: %s (snapshot %s)" % (ident, "applied" if result["ok"] else "FAILED", result["detail"], result["snapshot"])
+
+
 def main(argv=None):
     """stack-guardian doctor | snapshot. Exit: 0 OK/INFO, 1 WARN, 2 FAIL, 3 usage, 4 crash in the doctor itself."""
     if argv is None:
@@ -73,6 +162,10 @@ def main(argv=None):
     d.add_argument("--state", help="state file (default $STACK_GUARDIAN_STATE or ~/.stack-guardian/state.json)")
     d.add_argument("--json", action="store_true")
     d.add_argument("--quiet", action="store_true")
+    d.add_argument("--fix", metavar="ID", help="run the typed fix of finding ID (code or code@node); a dry run unless --apply")
+    d.add_argument("--apply", action="store_true", help="with --fix: really perform it (snapshot first, one audit line after)")
+    d.add_argument("--config", help="with --fix: JSON file {\"lanes\": {name: [argv...]}} declaring the lanes restart_lane may run")
+    d.add_argument("--audit", help="with --fix --apply: audit file (default fixes.jsonl next to the state file)")
     s = sub.add_parser("snapshot")
     s.add_argument("--nodes", required=True)
     try:
@@ -81,6 +174,8 @@ def main(argv=None):
             raise ValueError("a command is required: doctor | snapshot")
         if args.command == "doctor" and bool(args.snapshot) == bool(args.nodes):
             raise ValueError("doctor needs exactly one of --snapshot FILE or --nodes FILE")
+        if args.command == "doctor" and not args.fix and (args.apply or args.config or args.audit):
+            raise ValueError("--apply, --config and --audit need --fix ID")
     except ValueError as exc:
         print("stack-guardian: usage: %s" % exc, file=sys.stderr)
         return USAGE
@@ -94,6 +189,15 @@ def main(argv=None):
         snapshot = read(args.snapshot) if args.snapshot else sg_collect.snapshot(read(args.nodes))
         ctx = read(args.ctx) if args.ctx else {}
         findings, code = doctor(args.checks_dir, snapshot, args.state, ctx=ctx)
+        if args.fix:
+            target, why = pick_fix_finding(findings, args.fix)
+            if target is None:
+                print("stack-guardian: usage: %s" % why, file=sys.stderr)
+                return USAGE
+            deps = real_deps(snapshot, _state_dir(args.state), args.audit)
+            result = sg_fixes.apply_fix(target["fix"], read(args.config) if args.config else {}, deps, apply=args.apply)
+            print(json.dumps(result) if args.json else _render_fix(args.fix, result))
+            return 0 if result["ok"] else 1
     except Exception as exc:  # noqa: BLE001 - one line, no traceback: the doctor never crashes the shell
         print("stack-guardian: crash: %s: %s" % (type(exc).__name__, exc), file=sys.stderr)
         return CRASH
