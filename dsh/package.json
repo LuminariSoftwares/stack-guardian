@@ -9,11 +9,29 @@
     "./package.json": "./package.json"
   },
   "files": [
-    "index.js"
+    "index.js",
+    "README.md",
+    "LICENSE"
   ],
   "license": "MIT",
   "author": "LuminariSoftwares",
   "engines": {
     "node": ">=20"
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/LuminariSoftwares/stack-guardian.git",
+    "directory": "dsh"
+  },
+  "homepage": "https://github.com/LuminariSoftwares/stack-guardian#readme",
+  "bugs": {
+    "url": "https://github.com/LuminariSoftwares/stack-guardian/issues"
+  },
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "ollama",
+    "local-llm",
+    "health-check"
+  ]
 }
