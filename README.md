@@ -1,5 +1,8 @@
 # stack-guardian
 
+[![ci](https://github.com/LuminariSoftwares/stack-guardian/actions/workflows/ci.yml/badge.svg)](https://github.com/LuminariSoftwares/stack-guardian/actions/workflows/ci.yml)
+[![privacy](https://github.com/LuminariSoftwares/stack-guardian/actions/workflows/privacy.yml/badge.svg)](https://github.com/LuminariSoftwares/stack-guardian/actions/workflows/privacy.yml)
+
 A health doctor for a home AI stack. It collects a snapshot of your nodes (Ollama endpoints, loaded models, NVIDIA
 GPUs, tailnet peers), runs small Python rules against it, remembers the last runs, and reports findings with a
 confidence grade: one sample is at most `LIKELY`, the same finding twice in a row is `VERIFIED`. A finding can carry a
@@ -19,21 +22,38 @@ pip install -e .
 
 This gives you three commands: `stack-guardian` (the CLI), `stack-guardian-serve` and `stack-guardian-mcp`.
 
+Try it offline first: the example snapshot makes every shipped rule fire once.
+
+```
+stack-guardian doctor --snapshot examples/snapshot.json --ctx examples/ctx.json
+```
+
+## For coding agents
+
+- **MCP server** (any MCP client): `stack-guardian-mcp` speaks MCP over stdio with three read-only tools,
+  `stack_health`, `stack_snapshot` and `explain`. In Claude Code:
+
+  ```
+  claude mcp add stack-guardian -e STACK_GUARDIAN_NODES=/path/to/nodes.json -- stack-guardian-mcp
+  ```
+
+  Other clients: command `stack-guardian-mcp`, args `["--nodes", "/path/to/nodes.json"]`. `stack_health` grades
+  against the saved run history without adding to it, and reuses one snapshot for 10 s (`--ttl SECONDS`).
+- **DSH plugin** (`dsh/`, Node 20+): adds one line at the start of a DeepSeek Harness session when the doctor reports
+  WARN or FAIL, and nothing otherwise. It runs `stack-guardian doctor --json --quiet`, so set `STACK_GUARDIAN_NODES`
+  to your nodes file in the harness environment.
+
 ## What it does
 
 ### 1. `doctor` - run the checks
 
-Describe your nodes in a JSON file (see [examples/nodes.json](examples/nodes.json)):
+Describe your nodes in a JSON file (see [examples/nodes.json](examples/nodes.json)) and check them live:
 
 ```
 stack-guardian doctor --nodes examples/nodes.json --ctx examples/ctx.json
 ```
 
-Or run the shipped rules against a snapshot you already have (works offline, try it now):
-
-```
-stack-guardian doctor --snapshot examples/snapshot.json
-```
+With neither `--snapshot` nor `--nodes`, `doctor` reads the nodes file named by `$STACK_GUARDIAN_NODES`.
 
 Options: `--checks-dir DIR` (your own rules, default is the shipped `checks.d`), `--ctx FILE` (rule settings such as
 the model each node is expected to hold), `--state FILE` (default `$STACK_GUARDIAN_STATE` or
@@ -41,8 +61,9 @@ the model each node is expected to hold), `--state FILE` (default `$STACK_GUARDI
 
 Exit codes: `0` all OK/INFO, `1` a WARN, `2` a FAIL, `3` usage, `4` the doctor itself crashed.
 
-Shipped rules: `ollama.unreachable`, `model.not_loaded`, `vram.unattributed`, `tailnet.peer_offline`,
-`tailnet.relayed`. A rule that raises becomes a `check.crashed` WARN - a buggy rule never reports a broken stack.
+Shipped rules: `node.unreachable`, `ollama.unreachable`, `model.not_loaded`, `vram.unattributed`, `gpu.unavailable`,
+`tailnet.unavailable`, `tailnet.peer_offline`, `tailnet.relayed`. Each raises one finding per affected node. A rule that
+raises becomes a `check.crashed` WARN - a buggy rule never reports a broken stack.
 
 ### 2. `doctor --fix ID` - run a finding's typed fix
 
@@ -56,7 +77,7 @@ shell string:
 | `set_env` | writes `NAME=value` to `<state folder>/env` and sets it for the process | `name`, `value` |
 
 ```
-stack-guardian doctor --checks-dir examples/checks.d --snapshot examples/snapshot.json --fix atlas.stuck --config examples/lanes.json
+stack-guardian doctor --checks-dir examples/checks.d --snapshot examples/snapshot.json --fix ollama.stuck --config examples/lanes.json
 ```
 
 That is a **dry run**: it prints the plan and changes nothing. Add `--apply` to perform it. An applied fix first saves
@@ -70,10 +91,8 @@ success, `1` refused or failed, `3` usage.
 - `stack-guardian snapshot --nodes FILE` prints the raw snapshot the rules read.
 - `stack-guardian-serve --nodes FILE [--port 8788]` serves a fresh snapshot at `GET /snapshot` (read-only, loopback
   unless you pass `--host H --allow-remote`), so one machine can ask another for its health.
-- `stack-guardian-mcp --nodes FILE [--ctx FILE] [--state FILE]` is a read-only MCP stdio server with the tools
-  `stack_health`, `stack_snapshot` and `explain`.
-- `dsh/` is a plugin for the DeepSeek Harness that adds one line at session start when the doctor reports WARN or
-  FAIL (Node 20+; see `dsh/index.js`).
+  no auth: bind to localhost or a tailnet IP only.
+- `stack-guardian-mcp --nodes FILE [--ctx FILE] [--state FILE] [--ttl SECONDS]`: see [For coding agents](#for-coding-agents).
 
 ## Writing a rule
 
@@ -81,25 +100,26 @@ success, `1` refused or failed, `3` usage.
 from stack_guardian import finding as F
 
 def ollama_up(snapshot, ctx):
-    if not snapshot["nodes"]["atlas"].get("reachable"):
-        return F.make_finding("ollama.unreachable", "missing", "FAIL", "atlas", "Ollama does not answer")
+    if not snapshot["nodes"]["gpu-box"].get("reachable"):
+        return F.make_finding("ollama.unreachable", "missing", "FAIL", "gpu-box", "Ollama does not answer")
     return None
 
 CHECKS = [("ollama.up", ollama_up)]
 ```
 
 Drop the file in a folder and point `--checks-dir` at it. A full example with a fix is in
-[examples/checks.d/20_atlas_fix.py](examples/checks.d/20_atlas_fix.py).
+[examples/checks.d/20_ollama_fix.py](examples/checks.d/20_ollama_fix.py). A rule may also return a list of findings,
+one per node.
 
 ## Examples
 
 | file | what it is |
 |---|---|
-| `examples/nodes.json` | two nodes: a local one with GPUs, a remote one over the tailnet |
-| `examples/ctx.json` | rule settings: which model atlas should hold |
-| `examples/snapshot.json` | an offline snapshot with one dead node, for trying `doctor` and `--fix` |
+| `examples/nodes.json` | three nodes: a local one with GPUs, two remote ones over the tailnet |
+| `examples/ctx.json` | rule settings: which model gpu-box-2 should hold |
+| `examples/snapshot.json` | an offline snapshot on which every shipped rule fires once, for trying `doctor` and `--fix` |
 | `examples/lanes.json` | the lanes `restart_lane` is allowed to run |
-| `examples/checks.d/20_atlas_fix.py` | a custom rule whose finding carries a fix |
+| `examples/checks.d/20_ollama_fix.py` | a custom rule whose finding carries a fix |
 
 ## Test
 
@@ -108,7 +128,7 @@ pip install pytest
 python -m pytest -q
 ```
 
-CI runs this on Ubuntu, Windows and macOS with Python 3.11. To publish a release see [RELEASE_STEPS.md](RELEASE_STEPS.md).
+CI runs this on Ubuntu, Windows and macOS with Python 3.11, plus a privacy scan of every tracked file.
 
 ## License
 

@@ -1,10 +1,37 @@
 {
   "schema": 1,
+  "taken_at": "2026-10-10T20:00:00+00:00",
   "nodes": {
-    "atlas": {
+    "gpu-box": {
       "reachable": false,
       "latency_ms": null,
-      "ollama": [{"url": "http://127.0.0.1:11434", "error": "ConnectionError: refused", "running": []}]
+      "ollama": [{"url": "http://127.0.0.1:11434", "error": "ConnectionError: refused", "running": []}],
+      "gpus": [
+        {"index": 0, "uuid": "GPU-0000", "name": "RTX 3060", "total_mib": 12288, "used_mib": 6200,
+         "attributed_mib": 0, "unattributed_mib": 6200, "processes": []}
+      ]
+    },
+    "gpu-box-2": {
+      "reachable": true,
+      "latency_ms": 38,
+      "ollama": [{"url": "http://100.64.0.2:11434", "error": null, "running": [{"name": "qwen3:8b"}]}],
+      "tailnet": {"peer": true, "direct": false, "derp": "ord", "ips": ["100.64.0.2"]}
+    },
+    "home-server": {"reachable": false, "error": "timeout after 10.0s", "ollama": []},
+    "nas": {
+      "reachable": false,
+      "latency_ms": null,
+      "ollama": [],
+      "tailnet": {"peer": false, "direct": null, "derp": null, "ips": []}
+    },
+    "laptop": {
+      "reachable": false,
+      "latency_ms": null,
+      "ollama": [],
+      "gpus": [],
+      "gpu_error": "nvidia-smi unavailable (not installed, or it failed)",
+      "tailnet": {"peer": null, "direct": null, "derp": null, "ips": [],
+                  "error": "tailscale status failed (tailscale missing or tailscaled down)"}
     }
   }
 }

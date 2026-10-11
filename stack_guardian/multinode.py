@@ -1,4 +1,4 @@
-# @job: wq1003-multinode-t2-1 -- ox (code_ladder T2) try 1; probe_multinode 11/11 on node1 after the O5 probe fix (lesson 614 / 79); brief + probe by O5 2026-10-03
+# Multi-node snapshot pull: every node at once, one overall deadline.
 """Collect health data from several machines at once, without letting one hung
 node stall the whole check.
 

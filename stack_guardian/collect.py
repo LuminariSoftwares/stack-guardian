@@ -63,21 +63,31 @@ def collect_ollama(url, http_get=None, clock=None):
 
 def collect_gpus(run=None):
     """Describe the local GPUs and their attributed compute processes."""
+    return collect_gpus_status(run)[0]
+
+
+def collect_gpus_status(run=None):
+    """(gpus, error): error is set when nvidia-smi is missing or fails, so "no GPUs" and "cannot tell" differ."""
     run = run or default_run
     gpu = run(GPU_QUERY)
-    if not gpu:
-        return []
-    return sg_parsers.parse_nvsmi(gpu, run(APPS_QUERY) or "")
+    if gpu is None:
+        return [], "nvidia-smi unavailable (not installed, or it failed)"
+    if not gpu.strip():
+        return [], None
+    return sg_parsers.parse_nvsmi(gpu, run(APPS_QUERY) or ""), None
 
 
 def collect_tailnet(peer_host, run=None):
-    """Report whether peer_host is visible on the tailnet and how it is reached."""
+    """Report whether peer_host is visible on the tailnet and how it is reached; peer None when tailscale cannot say."""
     run = run or default_run
-    return sg_parsers.parse_tailscale(run(TAILSCALE_STATUS) or "", peer_host)
+    out = run(TAILSCALE_STATUS)
+    if out is None:
+        return dict(sg_parsers.UNAVAILABLE, error="tailscale status failed (tailscale missing or tailscaled down)")
+    return sg_parsers.parse_tailscale(out, peer_host)
 
 
 def snapshot(nodes, run=None, http_get=None, now=None, clock=None, timeout_s=10.0):
-    """Build the one snapshot dict the checks read, in node input order. P43 S4: every node is collected at
+    """Build the one snapshot dict the checks read, in node input order. Every node is collected at
     the same time and a node that has not answered within timeout_s is reported down (multinode.pull)."""
     try:
         from . import multinode as sg_multinode
@@ -89,7 +99,9 @@ def snapshot(nodes, run=None, http_get=None, now=None, clock=None, timeout_s=10.
         ok = [o for o in ollama if o["error"] is None]
         node = {"reachable": bool(ok), "latency_ms": ok[0]["latency_ms"] if ok else None, "ollama": ollama}
         if cfg.get("local"):
-            node["gpus"] = collect_gpus(run=run)
+            node["gpus"], gpu_error = collect_gpus_status(run=run)
+            if gpu_error:
+                node["gpu_error"] = gpu_error
         if cfg.get("tailnet_host"):
             node["tailnet"] = collect_tailnet(cfg["tailnet_host"], run=run)
         return node
@@ -126,8 +138,8 @@ def _selftest():
         return None
 
     def t_ollama_ok():
-        o = collect_ollama("http://atlas:11434/", http_get=http_ok, clock=clock)
-        return (o["url"] == "http://atlas:11434" and o["version"] == "0.34.2" and o["models"] == ["qwen3:30b", "nomic-embed-text"]
+        o = collect_ollama("http://gpu-box:11434/", http_get=http_ok, clock=clock)
+        return (o["url"] == "http://gpu-box:11434" and o["version"] == "0.34.2" and o["models"] == ["qwen3:30b", "nomic-embed-text"]
                 and o["running"][0]["name"] == "qwen3:30b" and o["latency_ms"] == 42 and o["error"] is None)
 
     def t_ollama_dead():
@@ -146,13 +158,13 @@ def _selftest():
         return t["peer"] is True and t["direct"] is True and t["ips"] == ["100.64.0.10"]
 
     def t_tailnet_missing():
-        return collect_tailnet("atlas", run=run_none)["peer"] is False
+        return collect_tailnet("gpu-box", run=run_none)["peer"] is None
 
     def t_snapshot_shape():
-        s = snapshot({"atlas": {"ollama": ["http://atlas:11434"], "tailnet_host": "gpu-box"},
-                      "node1": {"ollama": ["http://n1:11434"], "local": True}},
+        s = snapshot({"gpu-box": {"ollama": ["http://gpu-box:11434"], "tailnet_host": "gpu-box"},
+                      "gpu-box-2": {"ollama": ["http://n1:11434"], "local": True}},
                      run=run_ok, http_get=lambda u, timeout=5: http_dead(u) if "n1" in u else http_ok(u), now="T")
-        a, n = s["nodes"]["atlas"], s["nodes"]["node1"]
+        a, n = s["nodes"]["gpu-box"], s["nodes"]["gpu-box-2"]
         return (s["schema"] == 1 and s["taken_at"] == "T" and a["reachable"] is True and "gpus" not in a
                 and a["tailnet"]["peer"] is True and n["reachable"] is False and n["latency_ms"] is None and len(n["gpus"]) == 2)
 

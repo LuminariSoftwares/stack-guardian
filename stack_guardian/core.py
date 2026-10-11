@@ -74,7 +74,8 @@ def load_checks(checks_dir):
 def run_all(checks, snapshot, ctx=None, max_workers=8):
     """Run every check through sg_finding.run_check, concurrently.
 
-    Findings come back in the order of `checks`; None results are dropped.
+    Findings come back in the order of `checks`; a check may return one finding
+    or a list of them (one per node); None results are dropped.
     """
     checks = list(checks)
     if not checks:
@@ -90,7 +91,10 @@ def run_all(checks, snapshot, ctx=None, max_workers=8):
                    for index, (check_id, fn) in enumerate(checks)]
         for future in futures:
             future.result()
-    return [finding for finding in results if finding is not None]
+    flat = []
+    for result in results:
+        flat.extend(result if isinstance(result, list) else [result])
+    return [finding for finding in flat if finding is not None]
 
 
 def render(findings):

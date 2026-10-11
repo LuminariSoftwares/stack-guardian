@@ -20,16 +20,16 @@ def test_example_files_are_valid_json():
 def test_shipped_rules_on_example_snapshot(tmp_path):
     r = _doctor(tmp_path, "--snapshot", str(EX / "snapshot.json"), "--ctx", str(EX / "ctx.json"))
     assert r.returncode == 2, r.stdout + r.stderr
-    assert json.loads(r.stdout)["findings"][0]["code"] == "ollama.unreachable"
+    assert "ollama.unreachable" in {f["code"] for f in json.loads(r.stdout)["findings"]}
 
 
 def test_example_fix_dry_run_then_apply(tmp_path):
     lanes = json.loads((EX / "lanes.json").read_text(encoding="utf-8"))
-    lanes["lanes"]["atlas_ollama"][0] = sys.executable  # a bare "python" may not be on PATH in CI or on Windows
+    lanes["lanes"]["gpu_box_ollama"][0] = sys.executable  # a bare "python" may not be on PATH in CI or on Windows
     cfg = tmp_path / "lanes.json"
     cfg.write_text(json.dumps(lanes), encoding="utf-8")
     base = ("--checks-dir", str(EX / "checks.d"), "--snapshot", str(EX / "snapshot.json"),
-            "--fix", "atlas.stuck", "--config", str(cfg))
+            "--fix", "ollama.stuck", "--config", str(cfg))
     dry = _doctor(tmp_path, *base)
     assert dry.returncode == 0 and json.loads(dry.stdout)["applied"] is False
     done = _doctor(tmp_path, *base, "--apply")

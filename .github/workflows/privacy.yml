@@ -1,0 +1,89 @@
+name: privacy
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    name: privacy scan (tracked files)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Scan tracked files
+        env:
+          PRIVACY_EXTRA_PATTERNS: ${{ secrets.PRIVACY_EXTRA_PATTERNS }}
+        shell: python
+        run: |
+          # CI logs are public: print file:line and the pattern NUMBER only, never the matched text or the pattern.
+          import os, re, subprocess, sys
+
+          SELF = ".github/workflows/privacy.yml"
+          PLACEHOLDER_IP = re.compile(r"100\.64\.0\.([1-9]|1[0-9]|20)")
+          ALLOWED_EMAIL = re.compile(r"(?i)luminarientertainment@gmail\.com|[^@\s]+@users\.noreply\.github\.com|[^@\s]+@([a-z0-9-]+\.)*example\.com")
+
+          def allowed_ip(m):
+              return PLACEHOLDER_IP.fullmatch(m.group(0)) is not None
+
+          def allowed_email(m):
+              return ALLOWED_EMAIL.fullmatch(m.group(0)) is not None
+
+          KEY = r"[A-Za-z0-9_\-]{12,}"
+          BUILTIN = [
+              # 1: Tailscale CGNAT range 100.64.0.0/10, except the documented placeholders 100.64.0.1-100.64.0.20
+              (r"(?<![\d.])100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.\d{1,3}\.\d{1,3}(?![\d.]*\d)", allowed_ip),
+              # 2: MagicDNS names
+              (r"(?i)\.ts\.net\b", None),
+              # 3: a Windows user profile path, any case, any number of backslashes or slashes
+              (r"(?i)\b[a-z]:(?:\\+|/+)users(?:\\+|/+)", None),
+              # 4: a Windows drive path into an AI folder
+              (r"[A-Z]:\\+AI", None),
+              # 5-12: API key prefixes
+              (r"(?<![A-Za-z0-9_\-])sk-" + KEY, None),
+              (r"(?<![A-Za-z0-9_\-])sk-or-" + KEY, None),
+              (r"(?<![A-Za-z0-9_\-])tvly-" + KEY, None),
+              (r"(?<![A-Za-z0-9_\-])ghp_" + KEY, None),
+              (r"(?<![A-Za-z0-9_\-])github_pat_" + KEY, None),
+              (r"(?<![A-Za-z0-9_\-])nvapi-" + KEY, None),
+              (r"(?<![A-Za-z0-9_\-])gsk_" + KEY, None),
+              (r"(?<![A-Za-z0-9_\-])AIza" + KEY, None),
+              # 13: email addresses other than the project address, GitHub noreply and example.com
+              (r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}", allowed_email),
+          ]
+          patterns = []
+          for n, (rx, allow) in enumerate(BUILTIN, 1):
+              patterns.append((str(n), re.compile(rx), allow))
+          extra = [ln.strip() for ln in (os.environ.get("PRIVACY_EXTRA_PATTERNS") or "").splitlines() if ln.strip()]
+          bad_extra = False
+          for n, rx in enumerate(extra, 1):
+              try:
+                  patterns.append(("extra-%d" % n, re.compile(rx), None))
+              except re.error:
+                  print("extra pattern %d does not compile" % n)
+                  bad_extra = True
+
+          files = subprocess.run(["git", "ls-files", "-z"], capture_output=True, check=True).stdout.decode("utf-8").split("\0")
+          hits = 0
+          scanned = 0
+          for path in files:
+              if not path or path == SELF or not os.path.isfile(path):
+                  continue
+              with open(path, "rb") as fh:
+                  data = fh.read()
+              if b"\0" in data:
+                  continue  # binary
+              scanned += 1
+              for lineno, line in enumerate(data.decode("utf-8", errors="replace").splitlines(), 1):
+                  for num, rx, allow in patterns:
+                      if any(allow is None or not allow(m) for m in rx.finditer(line)):
+                          print("%s:%d: pattern %s" % (path, lineno, num))
+                          hits += 1
+          print("privacy scan: %d hit(s) in %d tracked text files (%d built-in, %d extra patterns)"
+                % (hits, scanned, len(BUILTIN), len(extra)))
+          sys.exit(1 if hits or bad_extra else 0)
