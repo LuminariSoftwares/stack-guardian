@@ -8,16 +8,12 @@ GPUs, tailnet peers), runs small Python rules against it, remembers the last run
 confidence grade: one sample is at most `LIKELY`, the same finding twice in a row is `VERIFIED`. A finding can carry a
 typed fix that you run on purpose, never automatically.
 
-Status: **0.1.0.dev0, pre-release.** Standard library only, Python 3.11+.
+Status: **0.1.0, first release.** Standard library only, Python 3.11+.
 
 ## Install
 
 ```
-git clone https://github.com/LuminariSoftwares/stack-guardian.git
-cd stack-guardian
-python -m venv .venv
-.venv\Scripts\activate          # Windows;  macOS/Linux: source .venv/bin/activate
-pip install -e .
+pip install stack-guardian
 ```
 
 This gives you three commands: `stack-guardian` (the CLI), `stack-guardian-serve` and `stack-guardian-mcp`.
@@ -25,6 +21,19 @@ This gives you three commands: `stack-guardian` (the CLI), `stack-guardian-serve
 Try it offline first: the example snapshot makes every shipped rule fire once.
 
 ```
+curl -LO https://raw.githubusercontent.com/LuminariSoftwares/stack-guardian/main/examples/snapshot.json
+curl -LO https://raw.githubusercontent.com/LuminariSoftwares/stack-guardian/main/examples/ctx.json
+stack-guardian doctor --snapshot snapshot.json --ctx ctx.json
+```
+
+From a clone instead (for writing rules or running the tests):
+
+```
+git clone https://github.com/LuminariSoftwares/stack-guardian.git
+cd stack-guardian
+python -m venv .venv
+.venv\Scripts\activate          # Windows;  macOS/Linux: source .venv/bin/activate
+pip install -e .
 stack-guardian doctor --snapshot examples/snapshot.json --ctx examples/ctx.json
 ```
 
@@ -39,7 +48,7 @@ stack-guardian doctor --snapshot examples/snapshot.json --ctx examples/ctx.json
 
   Other clients: command `stack-guardian-mcp`, args `["--nodes", "/path/to/nodes.json"]`. `stack_health` grades
   against the saved run history without adding to it, and reuses one snapshot for 10 s (`--ttl SECONDS`).
-- **DSH plugin** (`dsh/`, Node 20+): adds one line at the start of a DeepSeek Harness session when the doctor reports
+- **DSH plugin** (`npm install dsh-stack-guardian`, source in `dsh/`, Node 20+): adds one line at the start of a DeepSeek Harness session when the doctor reports
   WARN or FAIL, and nothing otherwise. It runs `stack-guardian doctor --json --quiet`, so set `STACK_GUARDIAN_NODES`
   to your nodes file in the harness environment.
 

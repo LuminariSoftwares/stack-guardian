@@ -4,13 +4,26 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stack-guardian"
-version = "0.1.0.dev0"
+version = "0.1.0"
 description = "A health doctor for a home AI stack: Ollama nodes, GPUs and tailnet, with graded confidence."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "LuminariSoftwares" }]
+keywords = ["ollama", "gpu", "vram", "tailscale", "health-check", "local-llm", "mcp"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Environment :: Console",
+  "Topic :: System :: Monitoring",
+]
 dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/LuminariSoftwares/stack-guardian"
+Issues = "https://github.com/LuminariSoftwares/stack-guardian/issues"
+Changelog = "https://github.com/LuminariSoftwares/stack-guardian/blob/main/CHANGELOG.md"
 
 [project.scripts]
 stack-guardian = "stack_guardian.cli:main"
@@ -19,3 +32,7 @@ stack-guardian-serve = "stack_guardian.serve:main"
 
 [tool.setuptools]
 packages = ["stack_guardian"]
+
+[tool.setuptools.package-data]
+# the shipped rules are plain .py files in a non-package folder; without this a wheel installs with no rules
+stack_guardian = ["checks.d/*.py"]
