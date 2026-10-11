@@ -1,4 +1,5 @@
 {
-  "atlas": {"ollama": ["http://127.0.0.1:11434"], "local": true},
-  "node2": {"ollama": ["http://100.64.0.2:11434"], "tailnet_host": "node2"}
+  "gpu-box": {"ollama": ["http://127.0.0.1:11434"], "local": true},
+  "gpu-box-2": {"ollama": ["http://100.64.0.2:11434"], "tailnet_host": "gpu-box-2"},
+  "home-server": {"ollama": ["http://100.64.0.3:11434"], "tailnet_host": "home-server"}
 }

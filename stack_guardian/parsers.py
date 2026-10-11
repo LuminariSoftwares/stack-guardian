@@ -1,4 +1,4 @@
-"""sg_parsers -- pure parsers for the "stack-guardian" snapshot (TJ plan P43 S2, C-Snapshot).
+"""sg_parsers -- pure parsers for the "stack-guardian" snapshot.
 
 Standard library only.  No shelling out, no network: the caller passes the raw
 command / HTTP output text in and gets plain data structures back.
@@ -26,6 +26,7 @@ import tempfile
 __all__ = ["parse_nvsmi", "parse_tailscale", "parse_ollama_ps", "main"]
 
 _UNKNOWN = {"peer": False, "direct": None, "derp": None, "ips": []}
+UNAVAILABLE = {"peer": None, "direct": None, "derp": None, "ips": []}
 
 
 def _basename(path: str) -> str:
@@ -117,7 +118,9 @@ def parse_nvsmi(gpu_csv: str, apps_csv: str = "") -> list:
             if app["used_mib"] is not None:
                 attributed += app["used_mib"]
         gpu["attributed_mib"] = attributed
-        gpu["unattributed_mib"] = max(0, gpu["used_mib"] - attributed)
+        # Every process memory "[N/A]" (Windows WDDM): what is unattributed cannot be told, so say None.
+        all_na = bool(processes) and all(p["used_mib"] is None for p in processes)
+        gpu["unattributed_mib"] = None if all_na else max(0, gpu["used_mib"] - attributed)
         gpu["processes"] = processes
 
     return gpus
@@ -128,10 +131,13 @@ def parse_tailscale(status_json: str, peer_host: str) -> dict:
     try:
         data = json.loads(status_json)
     except (TypeError, ValueError):
-        return dict(_UNKNOWN)
+        return dict(UNAVAILABLE, error="tailscale status is not JSON")
 
     if not isinstance(data, dict):
-        return dict(_UNKNOWN)
+        return dict(UNAVAILABLE, error="tailscale status is not a JSON object")
+    backend = data.get("BackendState")
+    if isinstance(backend, str) and backend != "Running":
+        return dict(UNAVAILABLE, error="tailscaled is %s" % backend)
     peers = data.get("Peer")
     if not isinstance(peers, dict):
         return dict(_UNKNOWN)
@@ -479,10 +485,11 @@ def _check_tailscale_not_found() -> bool:
 
 
 def _check_tailscale_invalid_json() -> bool:
-    """Unparsable JSON gives the not-found record rather than raising."""
-    ok = parse_tailscale('{"invalid": json}', "myhost") == dict(_UNKNOWN)
-    ok = ok and parse_tailscale("", "myhost") == dict(_UNKNOWN)
-    ok = ok and parse_tailscale("not json at all", "myhost") == dict(_UNKNOWN)
+    """Unparsable JSON gives peer None plus an error rather than raising or claiming the peer is offline."""
+    ok = parse_tailscale('{"invalid": json}', "myhost")["peer"] is None
+    ok = ok and parse_tailscale("", "myhost")["peer"] is None
+    ok = ok and parse_tailscale("not json at all", "myhost")["error"] == "tailscale status is not JSON"
+    ok = ok and parse_tailscale(json.dumps({"BackendState": "NeedsLogin"}), "myhost")["error"] == "tailscaled is NeedsLogin"
     return ok
 
 
@@ -490,7 +497,7 @@ def _check_tailscale_bad_shape() -> bool:
     """A non-dict Peer, a non-dict peer entry, or a JSON list gives not-found."""
     ok = parse_tailscale(json.dumps({"Peer": ["myhost"]}), "myhost") == dict(_UNKNOWN)
     ok = ok and parse_tailscale(json.dumps({"Peer": {"p1": "myhost"}}), "myhost") == dict(_UNKNOWN)
-    ok = ok and parse_tailscale(json.dumps([{"HostName": "myhost"}]), "myhost") == dict(_UNKNOWN)
+    ok = ok and parse_tailscale(json.dumps([{"HostName": "myhost"}]), "myhost")["peer"] is None
     ok = ok and parse_tailscale(json.dumps({"Peer": {"p1": {"HostName": 7}}}), "myhost") == dict(_UNKNOWN)
     return ok
 

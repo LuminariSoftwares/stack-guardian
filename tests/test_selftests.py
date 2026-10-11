@@ -21,12 +21,12 @@ def test_doctor_end_to_end(tmp_path):
     (checks / "10_up.py").write_text(
         "from stack_guardian import finding as F\n"
         "def up(s, c):\n"
-        "    if not s['nodes']['atlas']['reachable']:\n"
-        "        return F.make_finding('ollama.unreachable', 'missing', 'FAIL', 'atlas', 'Ollama does not answer')\n"
+        "    if not s['nodes']['gpu-box']['reachable']:\n"
+        "        return F.make_finding('ollama.unreachable', 'missing', 'FAIL', 'gpu-box', 'Ollama does not answer')\n"
         "    return None\n"
         "CHECKS = [('ollama.up', up)]\n", encoding="utf-8")
     snap = tmp_path / "snap.json"
-    snap.write_text(json.dumps({"schema": 1, "nodes": {"atlas": {"reachable": False}}}), encoding="utf-8")
+    snap.write_text(json.dumps({"schema": 1, "nodes": {"gpu-box": {"reachable": False}}}), encoding="utf-8")
     state = tmp_path / "state.json"
     args = [sys.executable, "-m", "stack_guardian", "doctor", "--checks-dir", str(checks), "--snapshot", str(snap), "--state", str(state), "--json"]
     first = subprocess.run(args, capture_output=True, text=True, timeout=60)
@@ -61,12 +61,14 @@ def test_doctor_bad_snapshot_json_is_a_crash_not_usage(tmp_path):
 
 
 def test_doctor_needs_one_source():
-    r = subprocess.run([sys.executable, "-m", "stack_guardian", "doctor"], capture_output=True, text=True, timeout=60)
+    import os
+    env = {k: v for k, v in os.environ.items() if k != "STACK_GUARDIAN_NODES"}
+    r = subprocess.run([sys.executable, "-m", "stack_guardian", "doctor"], capture_output=True, text=True, timeout=60, env=env)
     assert r.returncode == 3
 
 
 def test_mcp_stdio_end_to_end(tmp_path):
-    """P43 S5: the server answers initialize, lists exactly three read-only tools, and a stack_health call
+    """The server answers initialize, lists exactly three read-only tools, and a stack_health call
     returns findings from the real doctor (a node file pointing at a closed port -> ollama.unreachable)."""
     nodes = tmp_path / "nodes.json"
     nodes.write_text(json.dumps({"lab": {"ollama": ["http://127.0.0.1:9"]}}), encoding="utf-8")
@@ -84,7 +86,7 @@ def test_mcp_stdio_end_to_end(tmp_path):
 
 
 def test_dsh_plugin_selftest():
-    """P43 S6: the DSH plugin (dsh/index.js) passes its own node selftest."""
+    """The DSH plugin (dsh/index.js) passes its own node selftest."""
     import os
     import shutil
     node = shutil.which("node")

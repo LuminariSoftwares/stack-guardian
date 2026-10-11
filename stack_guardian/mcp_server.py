@@ -9,6 +9,7 @@ imports the rest of stack_guardian.
 import json
 import os
 import sys
+import time
 
 PROTOCOL = "2024-11-05"
 SERVER_NAME = "stack-guardian"
@@ -23,6 +24,9 @@ TOOL_SPECS = [
      "inputSchema": {"type": "object", "properties": {"code": {"type": "string"}}, "required": ["code"]}},
 ]
 EXPLAIN = {
+    "node.unreachable": {"summary": "The collector got nothing from the node: it timed out or raised.",
+                         "try": ["check the machine is on and reachable", "raise the collection timeout if it is just slow"],
+                         "evidence_needed": ["the node's error in stack_snapshot"]},
     "ollama.unreachable": {"summary": "No Ollama endpoint on the node answered.",
                            "try": ["check the Ollama service is running on that node", "check the URL and port in the nodes file"],
                            "evidence_needed": ["the endpoint's /api/version from the node itself"]},
@@ -32,6 +36,12 @@ EXPLAIN = {
     "vram.unattributed": {"summary": "GPU memory is in use by something that is not a known model process.",
                           "try": ["list GPU processes with nvidia-smi", "close the program holding the memory"],
                           "evidence_needed": ["nvidia-smi --query-compute-apps output"]},
+    "gpu.unavailable": {"summary": "nvidia-smi is missing or failed, so the GPUs could not be read.",
+                        "try": ["run nvidia-smi on that node", "install or repair the NVIDIA driver"],
+                        "evidence_needed": ["nvidia-smi output on that node"]},
+    "tailnet.unavailable": {"summary": "tailscale is missing or tailscaled is down, so peer state is unknown (not offline).",
+                            "try": ["run tailscale status", "start tailscaled"],
+                            "evidence_needed": ["tailscale status --json on this machine"]},
     "tailnet.peer_offline": {"summary": "The tailnet reports the peer offline.",
                              "try": ["check the machine is on and tailscale is up", "tailscale ping the peer"],
                              "evidence_needed": ["tailscale status --json on both ends"]},
@@ -86,8 +96,11 @@ def handle(msg, tools):
         result = {}
     elif method == "tools/call":
         params = msg.get("params") or {}
+        args = (params.get("arguments") or {}) if isinstance(params, dict) else None
+        if not isinstance(args, dict):
+            return {"jsonrpc": "2.0", "id": rid,
+                    "error": {"code": -32602, "message": "invalid params: params and arguments must be objects"}}
         name = params.get("name")
-        args = params.get("arguments") or {}
         if name not in tools:
             result = _text_result("unknown tool: %s" % name, True)
         else:
@@ -158,8 +171,9 @@ def make_tools(health_fn, snapshot_fn):
     return {"stack_health": stack_health, "stack_snapshot": stack_snapshot, "explain": explain_tool}
 
 
-def default_tools(nodes_path, ctx_path=None, state_path=None):
-    """Bind the real collector and doctor; the files are re-read on every call."""
+def default_tools(nodes_path, ctx_path=None, state_path=None, ttl_s=10.0, clock=time.monotonic):
+    """Bind the real collector and doctor. A snapshot is reused for ttl_s seconds; stack_health grades against the
+    saved state without recording a sample, so repeated calls never turn LIKELY into VERIFIED and never write state."""
     from . import cli as sg_cli
     from . import collect as sg_collect
 
@@ -167,11 +181,19 @@ def default_tools(nodes_path, ctx_path=None, state_path=None):
         with open(path, encoding="utf-8") as fh:
             return json.load(fh)
 
-    def health():
-        return sg_cli.doctor(sg_cli.DEFAULT_CHECKS_DIR, sg_collect.snapshot(read(nodes_path)), state_path,
-                             ctx=read(ctx_path) if ctx_path else {})[0]
+    cache = {"at": None, "snapshot": None}
 
-    return make_tools(health, lambda: sg_collect.snapshot(read(nodes_path)))
+    def snapshot():
+        now = clock()
+        if cache["at"] is None or now - cache["at"] >= ttl_s:
+            cache["snapshot"], cache["at"] = sg_collect.snapshot(read(nodes_path)), now
+        return cache["snapshot"]
+
+    def health():
+        return sg_cli.doctor(sg_cli.DEFAULT_CHECKS_DIR, snapshot(), state_path,
+                             ctx=read(ctx_path) if ctx_path else {}, record=False)[0]
+
+    return make_tools(health, snapshot)
 
 
 def main(argv=None):
@@ -188,8 +210,12 @@ def main(argv=None):
         return None
 
     nodes = opt("--nodes") or os.environ.get("STACK_GUARDIAN_NODES")
-    if not nodes:
-        print("stack-guardian-mcp: usage: --nodes FILE (or STACK_GUARDIAN_NODES) [--ctx FILE] [--state FILE]",
+    try:
+        ttl = float(opt("--ttl") or 10)
+    except ValueError:
+        ttl = None
+    if not nodes or ttl is None:
+        print("stack-guardian-mcp: usage: --nodes FILE (or STACK_GUARDIAN_NODES) [--ctx FILE] [--state FILE] [--ttl SECONDS]",
               file=sys.stderr)
         return 3
 
@@ -197,14 +223,14 @@ def main(argv=None):
         sys.stdout.write(line + "\n")
         sys.stdout.flush()
 
-    serve(sys.stdin, write, default_tools(nodes, opt("--ctx"), opt("--state")))
+    serve(sys.stdin, write, default_tools(nodes, opt("--ctx"), opt("--state"), ttl_s=ttl))
     return 0
 
 
 def _selftest():
     calls = {"h": 0}
-    F = [{"code": "ollama.unreachable", "node": "atlas", "level": "FAIL"}, {"code": "vram.unattributed", "node": "node1", "level": "WARN"}]
-    S = {"taken_at": "t", "nodes": {"atlas": {"reachable": False}, "node1": {"reachable": True}}}
+    F = [{"code": "ollama.unreachable", "node": "gpu-box", "level": "FAIL"}, {"code": "vram.unattributed", "node": "gpu-box-2", "level": "WARN"}]
+    S = {"taken_at": "t", "nodes": {"gpu-box": {"reachable": False}, "gpu-box-2": {"reachable": True}}}
 
     def health():
         calls["h"] += 1
@@ -244,13 +270,13 @@ def _selftest():
         return r["result"]["isError"] is False and body["node"] == "all" and len(body["findings"]) == 2
 
     def c_health_node():
-        body = json.loads(text_of(handle(req(5, "tools/call", {"name": "stack_health", "arguments": {"node": "node1"}}), tools)))
-        return [f["code"] for f in body["findings"]] == ["vram.unattributed"] and body["node"] == "node1"
+        body = json.loads(text_of(handle(req(5, "tools/call", {"name": "stack_health", "arguments": {"node": "gpu-box-2"}}), tools)))
+        return [f["code"] for f in body["findings"]] == ["vram.unattributed"] and body["node"] == "gpu-box-2"
 
     def c_snapshot_node_and_unknown():
-        a = json.loads(text_of(handle(req(6, "tools/call", {"name": "stack_snapshot", "arguments": {"node": "atlas"}}), tools)))
+        a = json.loads(text_of(handle(req(6, "tools/call", {"name": "stack_snapshot", "arguments": {"node": "gpu-box"}}), tools)))
         b = json.loads(text_of(handle(req(7, "tools/call", {"name": "stack_snapshot", "arguments": {"node": "zz"}}), tools)))
-        return a == {"taken_at": "t", "nodes": {"atlas": {"reachable": False}}} and b["error"].startswith("no node 'zz'; known: atlas, node1")
+        return a == {"taken_at": "t", "nodes": {"gpu-box": {"reachable": False}}} and b["error"].startswith("no node 'zz'; known: gpu-box, gpu-box-2")
 
     def c_explain_known_and_unknown():
         k = explain("tailnet.relayed")
@@ -280,10 +306,10 @@ def _selftest():
     def c_health_body_counts_and_status():
         clean = health_body([], "")
         mixed = health_body(F, "")
-        warn_only = health_body([F[1], {"code": "x", "node": "n", "level": "info"}], "node1")
+        warn_only = health_body([F[1], {"code": "x", "node": "n", "level": "info"}], "gpu-box-2")
         return (clean == {"node": "all", "status": "ok", "counts": {"FAIL": 0, "WARN": 0, "INFO": 0, "OK": 0}, "findings": []}
                 and mixed["status"] == "fail" and mixed["counts"]["FAIL"] == 1 and mixed["counts"]["WARN"] == 1
-                and warn_only["status"] == "warn" and warn_only["counts"]["INFO"] == 1 and warn_only["node"] == "node1")
+                and warn_only["status"] == "warn" and warn_only["counts"]["INFO"] == 1 and warn_only["node"] == "gpu-box-2")
 
     def c_read_only_specs():
         return all(t["name"] in ("stack_health", "stack_snapshot", "explain") for t in TOOL_SPECS) and len(TOOL_SPECS) == 3

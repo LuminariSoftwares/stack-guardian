@@ -1,9 +1,10 @@
-# @job: coding-loop b1003-sg-state-t3-1-1003-181515 -- local writer qwen3-coder:30b, gate-approved 2026-10-03 18:19
+"""Run history for stack-guardian: the last runs per node, streaks, and confidence grading."""
 import json
 import os
 import shutil
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 STATE_ENV = "STACK_GUARDIAN_STATE"
@@ -26,35 +27,45 @@ def fresh() -> dict:
 
 def load(path=None) -> dict:
     """path or state_path(); json.loads of the file (utf-8). Missing file, unreadable file, invalid JSON, a non-dict,
-    "schema" != 1, or "nodes" not a dict -> fresh(). Never raises."""
+    "schema" != 1, or "nodes" not a dict -> fresh(). Never raises. Anything but a missing file prints one stderr line."""
     if path is None:
         path = state_path()
     try:
         with open(path, "r", encoding="utf-8") as fh:
             data = json.load(fh)
-        if not isinstance(data, dict):
-            return fresh()
-        if data.get("schema") != 1:
-            return fresh()
-        if not isinstance(data.get("nodes"), dict):
-            return fresh()
-        return data
-    except (FileNotFoundError, json.JSONDecodeError, TypeError, ValueError):
+    except FileNotFoundError:
         return fresh()
+    except (OSError, TypeError, ValueError) as exc:
+        return _discard(path, "%s: %s" % (type(exc).__name__, exc))
+    if not isinstance(data, dict) or data.get("schema") != 1 or not isinstance(data.get("nodes"), dict):
+        return _discard(path, "not a schema 1 state")
+    return data
+
+
+def _discard(path, why):
+    print("stack-guardian: state %s discarded (%s); starting fresh" % (path, why), file=sys.stderr)
+    return fresh()
 
 
 def save(state, path=None) -> None:
-    """path or state_path(); create parent folders; write json.dumps(state, sort_keys=True) to <name>.tmp beside it,
-    then os.replace(tmp, path) -- no .tmp file is left behind."""
+    """path or state_path(); create parent folders; write json.dumps(state, sort_keys=True) to a unique temp file
+    beside it, then os.replace(tmp, path) -- concurrent saves never share a temp file and none is left behind."""
     if path is None:
         path = state_path()
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_suffix(".tmp")
+    fd, tmp_path = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".tmp")
     try:
-        with open(tmp_path, "w", encoding="utf-8") as fh:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
             json.dump(state, fh, sort_keys=True)
-        os.replace(tmp_path, path)
+        for attempt in range(20):
+            try:
+                os.replace(tmp_path, path)
+                break
+            except PermissionError:  # Windows: another save is replacing the same file this instant
+                if attempt == 19:
+                    raise
+                time.sleep(0.01)
     except Exception:
         # Clean up the temporary file if something goes wrong
         try:
@@ -153,7 +164,7 @@ def _selftest():
     tmp = tempfile.mkdtemp()
     old_env = os.environ.get(STATE_ENV)
     try:
-        def f(code, level="FAIL", node="atlas", confidence="VERIFIED"):
+        def f(code, level="FAIL", node="gpu-box", confidence="VERIFIED"):
             return {"code": code, "level": level, "node": node, "confidence": confidence}
 
         def t_missing_file_fresh():
@@ -167,49 +178,49 @@ def _selftest():
 
         def t_save_load_roundtrip():
             p = os.path.join(tmp, "sub", "s.json")
-            s = record_run(fresh(), "atlas", [f("x.y")], "2026-10-03T18:00:00")
+            s = record_run(fresh(), "gpu-box", [f("x.y")], "2026-10-03T18:00:00")
             save(s, p)
             return load(p) == s and not os.path.exists(p + ".tmp")
 
         def t_keeps_last_5():
             s = fresh()
             for i in range(7):
-                record_run(s, "atlas", [], "t%d" % i)
-            runs = s["nodes"]["atlas"]["runs"]
+                record_run(s, "gpu-box", [], "t%d" % i)
+            runs = s["nodes"]["gpu-box"]["runs"]
             return len(runs) == KEEP and runs[0]["at"] == "t2" and runs[-1]["at"] == "t6"
 
         def t_other_node_ignored():
-            s = record_run(fresh(), "atlas", [f("a.b", node="node1"), f("c.d")], "t0")
-            return s["nodes"]["atlas"]["runs"][0]["codes"] == {"c.d": "FAIL"}
+            s = record_run(fresh(), "gpu-box", [f("a.b", node="gpu-box-2"), f("c.d")], "t0")
+            return s["nodes"]["gpu-box"]["runs"][0]["codes"] == {"c.d": "FAIL"}
 
         def t_streak_counts_recent_bad_runs():
             s = fresh()
-            record_run(s, "atlas", [f("x.y")], "t0")
-            record_run(s, "atlas", [], "t1")
-            record_run(s, "atlas", [f("x.y", "WARN")], "t2")
-            record_run(s, "atlas", [f("x.y")], "t3")
-            return streak(s, "atlas", "x.y") == 2 and clear_streak(s, "atlas", "x.y") == 0
+            record_run(s, "gpu-box", [f("x.y")], "t0")
+            record_run(s, "gpu-box", [], "t1")
+            record_run(s, "gpu-box", [f("x.y", "WARN")], "t2")
+            record_run(s, "gpu-box", [f("x.y")], "t3")
+            return streak(s, "gpu-box", "x.y") == 2 and clear_streak(s, "gpu-box", "x.y") == 0
 
         def t_one_sample_is_likely_at_most():
-            s = record_run(fresh(), "atlas", [f("x.y")], "t0")
-            return grade(s, "atlas", f("x.y"))["confidence"] == "LIKELY"
+            s = record_run(fresh(), "gpu-box", [f("x.y")], "t0")
+            return grade(s, "gpu-box", f("x.y"))["confidence"] == "LIKELY"
 
         def t_two_samples_verified():
             s = fresh()
-            record_run(s, "atlas", [f("x.y", confidence="LIKELY")], "t0")
-            record_run(s, "atlas", [f("x.y", confidence="LIKELY")], "t1")
-            return grade(s, "atlas", f("x.y", confidence="LIKELY"))["confidence"] == "VERIFIED"
+            record_run(s, "gpu-box", [f("x.y", confidence="LIKELY")], "t0")
+            record_run(s, "gpu-box", [f("x.y", confidence="LIKELY")], "t1")
+            return grade(s, "gpu-box", f("x.y", confidence="LIKELY"))["confidence"] == "VERIFIED"
 
         def t_ok_finding_untouched():
-            s = record_run(fresh(), "atlas", [f("x.ok", "OK")], "t0")
-            return grade(s, "atlas", f("x.ok", "OK"))["confidence"] == "VERIFIED"
+            s = record_run(fresh(), "gpu-box", [f("x.ok", "OK")], "t0")
+            return grade(s, "gpu-box", f("x.ok", "OK"))["confidence"] == "VERIFIED"
 
         def t_due_respects_fail_after():
             s = fresh()
-            record_run(s, "atlas", [f("x.y")], "t0")
-            first = due(s, "atlas", "x.y", fail_after=2)
-            record_run(s, "atlas", [f("x.y")], "t1")
-            return first is False and due(s, "atlas", "x.y", fail_after=2) is True
+            record_run(s, "gpu-box", [f("x.y")], "t0")
+            first = due(s, "gpu-box", "x.y", fail_after=2)
+            record_run(s, "gpu-box", [f("x.y")], "t1")
+            return first is False and due(s, "gpu-box", "x.y", fail_after=2) is True
 
         def t_env_path():
             os.environ[STATE_ENV] = os.path.join(tmp, "env.json")

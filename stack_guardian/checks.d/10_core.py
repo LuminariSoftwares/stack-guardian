@@ -1,7 +1,8 @@
 """Core 0.1 rules for stack-guardian, a health doctor for a home AI stack.
 
-Each rule inspects a whole snapshot and returns exactly ONE finding aggregated
-over every node, or None when the stack is healthy along that axis.
+Each rule inspects a whole snapshot and returns a list with ONE finding per
+failing node (empty when the stack is healthy along that axis), so every node
+keeps its own streak, matches a node= filter and can be named as code@node.
 """
 
 import sys
@@ -15,119 +16,94 @@ def _nodes(snapshot):
     return [(name, node or {}) for name, node in nodes.items()]
 
 
+def node_unreachable(snapshot, ctx):
+    return [F.make_finding("node.unreachable", "missing", "FAIL", name,
+                           "node did not answer the collector: %s" % node["error"],
+                           evidence=["%s: %s" % (name, node["error"])],
+                           try_=["check the machine is on and reachable", "raise timeout_s if the node is just slow"])
+            for name, node in _nodes(snapshot) if node.get("error")]
+
+
 def ollama_unreachable(snapshot, ctx):
-    bad = []
+    out = []
     for name, node in _nodes(snapshot):
-        for ep in (node.get("ollama") or []):
-            error = (ep or {}).get("error")
-            if error:
-                bad.append((name, ep.get("url"), error))
-    if not bad:
-        return None
-    return F.make_finding(
-        "ollama.unreachable",
-        "missing",
-        "FAIL",
-        bad[0][0],
-        "%d Ollama endpoint(s) do not answer: %s"
-        % (len(bad), ", ".join("%s %s" % (name, url) for name, url, _ in bad)),
-        evidence=["%s %s: %s" % (name, url, error) for name, url, error in bad],
-        try_=["check the Ollama service on that node"],
-    )
+        bad = [(ep.get("url"), ep.get("error")) for ep in (node.get("ollama") or []) if (ep or {}).get("error")]
+        if bad:
+            out.append(F.make_finding(
+                "ollama.unreachable", "missing", "FAIL", name,
+                "%d Ollama endpoint(s) do not answer: %s" % (len(bad), ", ".join(url for url, _ in bad)),
+                evidence=["%s %s: %s" % (name, url, error) for url, error in bad],
+                try_=["check the Ollama service on that node"]))
+    return out
 
 
 def model_not_loaded(snapshot, ctx):
     expect = (ctx or {}).get("expect") or {}
-    bad = []
+    out = []
     for name, node in _nodes(snapshot):
         want = (expect.get(name) or {}).get("model")
         if not want or not node.get("reachable"):
             continue
-        running = []
-        for ep in (node.get("ollama") or []):
-            for model in (ep or {}).get("running") or []:
-                running.append((model or {}).get("name"))
+        running = [(m or {}).get("name") for ep in (node.get("ollama") or []) for m in ((ep or {}).get("running") or [])]
         if want not in running:
-            bad.append((name, want, running))
-    if not bad:
-        return None
-    return F.make_finding(
-        "model.not_loaded",
-        "partial",
-        "WARN",
-        bad[0][0],
-        "expected model not loaded: "
-        + ", ".join("%s wants %s" % (name, want) for name, want, _ in bad),
-        evidence=[
-            "%s running: %s" % (name, ", ".join(running) or "nothing")
-            for name, _, running in bad
-        ],
-    )
+            out.append(F.make_finding("model.not_loaded", "partial", "WARN", name,
+                                      "expected model not loaded: %s wants %s" % (name, want),
+                                      evidence=["%s running: %s" % (name, ", ".join(running) or "nothing")]))
+    return out
 
 
 def vram_unattributed(snapshot, ctx):
     limit = int((ctx or {}).get("vram_unattributed_mib", 2048))
-    bad = []
+    out = []
     for name, node in _nodes(snapshot):
-        for gpu in (node.get("gpus") or []):
-            unattributed = int((gpu or {}).get("unattributed_mib") or 0)
-            if unattributed >= limit:
-                bad.append((name, (gpu or {}).get("name"), unattributed))
-    if not bad:
-        return None
-    return F.make_finding(
-        "vram.unattributed",
-        "partial",
-        "WARN",
-        bad[0][0],
-        "%d GPU(s) hold VRAM no listed process explains" % len(bad),
-        evidence=[
-            "%s %s: %d MiB unattributed" % (name, gpu, mib) for name, gpu, mib in bad
-        ],
-    )
+        bad = [((gpu or {}).get("name"), int((gpu or {}).get("unattributed_mib") or 0)) for gpu in (node.get("gpus") or [])]
+        bad = [(gpu, mib) for gpu, mib in bad if mib >= limit]
+        if bad:
+            out.append(F.make_finding("vram.unattributed", "partial", "WARN", name,
+                                      "%d GPU(s) hold VRAM no listed process explains" % len(bad),
+                                      evidence=["%s %s: %d MiB unattributed" % (name, gpu, mib) for gpu, mib in bad]))
+    return out
+
+
+def gpu_unavailable(snapshot, ctx):
+    return [F.make_finding("gpu.unavailable", "partial", "INFO", name, "GPU status unavailable",
+                           evidence=["%s: %s" % (name, node["gpu_error"])], try_=["check nvidia-smi runs on that node"])
+            for name, node in _nodes(snapshot) if node.get("gpu_error")]
+
+
+def _tailnet(node):
+    return (node.get("tailnet") or {}) if "tailnet" in node else None
+
+
+def tailnet_unavailable(snapshot, ctx):
+    return [F.make_finding("tailnet.unavailable", "partial", "INFO", name, "tailnet status unavailable",
+                           evidence=["%s: %s" % (name, _tailnet(node).get("error") or "tailscale gave no status")],
+                           try_=["check tailscale is installed and tailscaled is running"])
+            for name, node in _nodes(snapshot) if _tailnet(node) is not None and _tailnet(node).get("peer") is None]
 
 
 def tailnet_peer_offline(snapshot, ctx):
-    bad = []
-    for name, node in _nodes(snapshot):
-        if "tailnet" not in node:
-            continue
-        tailnet = node.get("tailnet") or {}
-        if not tailnet.get("peer"):
-            bad.append(name)
-    if not bad:
-        return None
-    return F.make_finding(
-        "tailnet.peer_offline",
-        "missing",
-        "FAIL",
-        bad[0],
-        "tailnet peer offline: " + ", ".join(bad),
-    )
+    return [F.make_finding("tailnet.peer_offline", "missing", "FAIL", name, "tailnet peer offline: " + name)
+            for name, node in _nodes(snapshot) if _tailnet(node) is not None and _tailnet(node).get("peer") is False]
 
 
 def tailnet_relayed(snapshot, ctx):
-    bad = []
+    out = []
     for name, node in _nodes(snapshot):
         tailnet = node.get("tailnet") or {}
         if tailnet.get("peer") and tailnet.get("direct") is False:
-            bad.append((name, tailnet.get("derp")))
-    if not bad:
-        return None
-    return F.make_finding(
-        "tailnet.relayed",
-        "partial",
-        "INFO",
-        bad[0][0],
-        "tailnet traffic is relayed, not direct: "
-        + ", ".join("%s via %s" % (name, derp) for name, derp in bad),
-    )
+            out.append(F.make_finding("tailnet.relayed", "partial", "INFO", name,
+                                      "tailnet traffic is relayed, not direct: %s via %s" % (name, tailnet.get("derp"))))
+    return out
 
 
 CHECKS = [
+    ("node.unreachable", node_unreachable),
     ("ollama.unreachable", ollama_unreachable),
     ("model.not_loaded", model_not_loaded),
     ("vram.unattributed", vram_unattributed),
+    ("gpu.unavailable", gpu_unavailable),
+    ("tailnet.unavailable", tailnet_unavailable),
     ("tailnet.peer_offline", tailnet_peer_offline),
     ("tailnet.relayed", tailnet_relayed),
 ]
@@ -135,41 +111,41 @@ CHECKS = [
 
 def _selftest():
     def snap(**over):
-        atlas = {"reachable": True, "latency_ms": 5, "ollama": [{"url": "http://a:11434", "error": None, "running": [{"name": "qwen3:30b"}]}],
-                 "tailnet": {"peer": True, "direct": True, "derp": None, "ips": []}}
-        node1 = {"reachable": True, "latency_ms": 1, "ollama": [{"url": "http://n:11435", "error": None, "running": []}],
-                 "gpus": [{"name": "RTX 3060", "used_mib": 300, "unattributed_mib": 300}]}
-        atlas.update(over.get("atlas", {}))
-        node1.update(over.get("node1", {}))
-        return {"schema": 1, "taken_at": "T", "nodes": {"atlas": atlas, "node1": node1}}
+        box = {"reachable": True, "latency_ms": 5, "ollama": [{"url": "http://a:11434", "error": None, "running": [{"name": "qwen3:30b"}]}],
+               "tailnet": {"peer": True, "direct": True, "derp": None, "ips": []}}
+        box2 = {"reachable": True, "latency_ms": 1, "ollama": [{"url": "http://n:11435", "error": None, "running": []}],
+                "gpus": [{"name": "RTX 3060", "used_mib": 300, "unattributed_mib": 300}]}
+        box.update(over.get("gpu-box", {}))
+        box2.update(over.get("gpu-box-2", {}))
+        return {"schema": 1, "taken_at": "T", "nodes": {"gpu-box": box, "gpu-box-2": box2}}
 
-    ctx = {"expect": {"atlas": {"model": "qwen3:30b"}}, "vram_unattributed_mib": 2048}
+    ctx = {"expect": {"gpu-box": {"model": "qwen3:30b"}}, "vram_unattributed_mib": 2048}
 
     def t_clean_snapshot_no_findings():
-        return all(fn(snap(), ctx) is None for _, fn in CHECKS)
+        return all(fn(snap(), ctx) == [] for _, fn in CHECKS)
 
     def t_dead_endpoint_fail():
-        f = ollama_unreachable(snap(node1={"ollama": [{"url": "http://n:11435", "error": "OSError: refused", "running": []}]}), ctx)
-        return f["code"] == "ollama.unreachable" and f["level"] == "FAIL" and f["node"] == "node1" and "refused" in f["evidence"][0]
+        [f] = ollama_unreachable(snap(**{"gpu-box-2": {"ollama": [{"url": "http://n:11435", "error": "OSError: refused", "running": []}]}}), ctx)
+        return f["code"] == "ollama.unreachable" and f["level"] == "FAIL" and f["node"] == "gpu-box-2" and "refused" in f["evidence"][0]
 
     def t_model_not_loaded_warn():
-        f = model_not_loaded(snap(atlas={"ollama": [{"url": "http://a:11434", "error": None, "running": [{"name": "qwen3-coder:30b"}]}]}), ctx)
-        return f["level"] == "WARN" and f["node"] == "atlas" and "qwen3-coder:30b" in f["evidence"][0]
+        [f] = model_not_loaded(snap(**{"gpu-box": {"ollama": [{"url": "http://a:11434", "error": None, "running": [{"name": "qwen3-coder:30b"}]}]}}), ctx)
+        return f["level"] == "WARN" and f["node"] == "gpu-box" and "qwen3-coder:30b" in f["evidence"][0]
 
     def t_unreachable_node_not_blamed_for_model():
-        return model_not_loaded(snap(atlas={"reachable": False}), ctx) is None
+        return model_not_loaded(snap(**{"gpu-box": {"reachable": False}}), ctx) == []
 
     def t_vram_threshold():
-        f = vram_unattributed(snap(node1={"gpus": [{"name": "RTX 4070", "used_mib": 9000, "unattributed_mib": 8000}]}), ctx)
+        [f] = vram_unattributed(snap(**{"gpu-box-2": {"gpus": [{"name": "RTX 4070", "used_mib": 9000, "unattributed_mib": 8000}]}}), ctx)
         return f["level"] == "WARN" and "8000 MiB" in f["evidence"][0]
 
     def t_tailnet_offline_and_relayed():
-        off = tailnet_peer_offline(snap(atlas={"tailnet": {"peer": False, "direct": None, "derp": None, "ips": []}}), ctx)
-        rel = tailnet_relayed(snap(atlas={"tailnet": {"peer": True, "direct": False, "derp": "ord", "ips": []}}), ctx)
+        [off] = tailnet_peer_offline(snap(**{"gpu-box": {"tailnet": {"peer": False, "direct": None, "derp": None, "ips": []}}}), ctx)
+        [rel] = tailnet_relayed(snap(**{"gpu-box": {"tailnet": {"peer": True, "direct": False, "derp": "ord", "ips": []}}}), ctx)
         return off["level"] == "FAIL" and rel["level"] == "INFO" and "ord" in rel["summary"]
 
     def t_empty_snapshot():
-        return all(fn({}, {}) is None for _, fn in CHECKS) and all(fn(None, None) is None for _, fn in CHECKS)
+        return all(fn({}, {}) == [] for _, fn in CHECKS) and all(fn(None, None) == [] for _, fn in CHECKS)
 
     checks = [
         ("clean_snapshot_no_findings", t_clean_snapshot_no_findings),

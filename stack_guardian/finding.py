@@ -96,7 +96,7 @@ def make_finding(
 
 
 def run_check(check_id, fn, snapshot, ctx, node=""):
-    """Run fn(snapshot, ctx); convert any Exception into a crash finding.
+    """Run fn(snapshot, ctx) (a finding, a list of findings, or None); convert any Exception into a crash finding.
 
     A buggy check never takes down the run and never reports FAIL: the crash
     finding is severity "crash", which forces level "WARN".

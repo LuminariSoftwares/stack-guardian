@@ -1,4 +1,4 @@
-"""`doctor --fix ID [--apply]`: dry-run by default, real dependencies injected at the CLI layer (P43 S7 CLI)."""
+"""`doctor --fix ID [--apply]`: dry-run by default, real dependencies injected at the CLI layer."""
 import json
 import subprocess
 import sys
@@ -17,16 +17,16 @@ def _checks(tmp_path, fix):
         "from stack_guardian import finding as F\n"
         "FIX = %r\n"
         "def down(s, c):\n"
-        "    return F.make_finding('lane.stuck', 'missing', 'FAIL', 'atlas', 'lane is stuck', fix=FIX)\n"
+        "    return F.make_finding('lane.stuck', 'missing', 'FAIL', 'gpu-box', 'lane is stuck', fix=FIX)\n"
         "def plain(s, c):\n"
-        "    return F.make_finding('lane.slow', 'degraded', 'WARN', 'atlas', 'lane is slow')\n"
+        "    return F.make_finding('lane.slow', 'degraded', 'WARN', 'gpu-box', 'lane is slow')\n"
         "CHECKS = [('lane.down', down), ('lane.slow', plain)]\n" % (fix,), encoding="utf-8")
     return d
 
 
 def _run(tmp_path, checks, *extra):
     snap = tmp_path / "snap.json"
-    snap.write_text(json.dumps({"schema": 1, "nodes": {"atlas": {}}}), encoding="utf-8")
+    snap.write_text(json.dumps({"schema": 1, "nodes": {"gpu-box": {}}}), encoding="utf-8")
     args = [sys.executable, "-m", "stack_guardian", "doctor", "--checks-dir", str(checks), "--snapshot", str(snap),
             "--state", str(tmp_path / "state.json"), "--json", *extra]
     return subprocess.run(args, capture_output=True, text=True, timeout=60)
@@ -58,7 +58,7 @@ def test_apply_runs_lane_snapshots_and_audits(tmp_path):
     assert out["ok"] is True and out["applied"] is True and out["detail"] == "rc 0"
     assert marker.read_text() == "ran"
     snaps = list((tmp_path / "snapshots").glob("*.json"))
-    assert len(snaps) == 1 and json.loads(snaps[0].read_text())["nodes"] == {"atlas": {}}
+    assert len(snaps) == 1 and json.loads(snaps[0].read_text())["nodes"] == {"gpu-box": {}}
     lines = (tmp_path / "fixes.jsonl").read_text().splitlines()
     assert len(lines) == 1
     line = json.loads(lines[0])
@@ -93,7 +93,7 @@ def test_usage_errors_exit_3(tmp_path):
 
 def test_node_qualified_id(tmp_path):
     marker, cfg, checks = _lane_setup(tmp_path)
-    r = _run(tmp_path, checks, "--fix", "lane.stuck@atlas", "--config", str(cfg))
+    r = _run(tmp_path, checks, "--fix", "lane.stuck@gpu-box", "--config", str(cfg))
     assert r.returncode == 0 and json.loads(r.stdout)["plan"]["action"] == "restart_lane"
 
 
@@ -133,5 +133,5 @@ def test_real_deps_set_env_persists_and_audit_hides_value(tmp_path):
 
 def test_real_deps_run_returns_exit_code_without_shell(tmp_path):
     deps = cli.real_deps({"nodes": {}}, tmp_path)
-    assert deps["run"]([sys.executable, "-c", "raise SystemExit(7)"]) == 7
-    assert deps["run"](["definitely-not-a-real-binary-xyz"]) != 0
+    assert deps["run"]([sys.executable, "-c", "raise SystemExit(7)"]) == (7, "")
+    assert deps["run"](["definitely-not-a-real-binary-xyz"])[0] != 0

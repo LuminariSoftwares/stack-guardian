@@ -1,4 +1,3 @@
-# @job: wq1003-serve-t2-1 -- ox (code_ladder T2) try 1, probe_serve 14/14; brief + probe by O5 2026-10-03 (P43 S4)
 """Tiny read-only HTTP endpoint for a stack_guardian health snapshot.
 
 One machine asks another for its *current* health by GETting /snapshot; the
@@ -25,6 +24,8 @@ def make_handler(get_snapshot):
         def _reply(self, code, obj):
             body = json.dumps(obj, default=str).encode("utf-8")
             self.send_response(code)
+            if code == 405:
+                self.send_header("Allow", "GET")
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()

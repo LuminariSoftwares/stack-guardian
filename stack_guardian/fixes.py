@@ -1,5 +1,4 @@
-# @job: wq1003-fixes (P43 S7) -- ox try 1 via the work queue; probe 10/10 on Windows; contract + probe by O5 2026-10-04
-"""stack_guardian.fixes -- typed, audited fixes (P43 S7, C-Finding fix field).
+"""stack_guardian.fixes -- typed, audited fixes (the finding "fix" field).
 
 A finding may carry fix={"action": <id>, "args": {...}}. Only three typed actions exist; there is never a
 raw shell string. Nothing changes without apply=True: a snapshot is taken first, the action runs through an
@@ -134,9 +133,10 @@ def apply_fix(fix, config, deps, apply=False):
         ok = status == 200
         detail = "http %s" % status
     elif plan["argv"] is not None:
-        rc = deps["run"](plan["argv"])
+        out = deps["run"](plan["argv"])
+        rc, err = out if isinstance(out, tuple) else (out, "")
         ok = rc == 0
-        detail = "rc %s" % rc
+        detail = "rc %s" % rc + ("; stderr: %s" % err if err else "")
     else:
         name, value = fix["args"]["name"], fix["args"]["value"]
         ok = bool(deps["set_env"](name, value))
@@ -147,8 +147,8 @@ def apply_fix(fix, config, deps, apply=False):
 
 
 def _selftest():
-    cfg = {"lanes": {"cpu_worker": ["svc", "restart", "cpu_worker"], "bad": [], "worse": "restart it"}}
-    um = {"action": "unload_model", "args": {"node": "atlas", "url": "http://100.64.0.10:11434/", "model": "qwen3-coder:30b"}}
+    cfg = {"lanes": {"cpu_worker": ["service", "restart", "cpu_worker"], "bad": [], "worse": "restart it"}}
+    um = {"action": "unload_model", "args": {"node": "gpu-box", "url": "http://100.64.0.10:11434/", "model": "qwen3-coder:30b"}}
     rl = {"action": "restart_lane", "args": {"lane": "cpu_worker"}}
     se = {"action": "set_env", "args": {"name": "OLLAMA_KEEP_ALIVE", "value": "10m"}}
 
@@ -193,7 +193,7 @@ def _selftest():
     def c_plan_lane_copies_argv():
         p = plan_fix(rl, cfg)
         p["argv"].append("x")
-        return cfg["lanes"]["cpu_worker"] == ["svc", "restart", "cpu_worker"]
+        return cfg["lanes"]["cpu_worker"] == ["service", "restart", "cpu_worker"]
 
     def c_dry_run_calls_nothing():
         deps, log = fake()
@@ -209,7 +209,7 @@ def _selftest():
         deps, log = fake()
         r = apply_fix(rl, cfg, deps, apply=True)
         line = json.loads(log["audit"][0])
-        return (r["ok"] and r["applied"] and log["calls"][:2] == ["snapshot", "save"] and log["calls"][2] == ("run", ["svc", "restart", "cpu_worker"])
+        return (r["ok"] and r["applied"] and log["calls"][:2] == ["snapshot", "save"] and log["calls"][2] == ("run", ["service", "restart", "cpu_worker"])
                 and len(log["audit"]) == 1 and line == {"ts": "2026-10-04T16:40:00", "action": "restart_lane", "args": {"lane": "cpu_worker"},
                                                         "ok": True, "detail": "rc 0", "snapshot": "SNAP1"})
 

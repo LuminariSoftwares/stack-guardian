@@ -22,15 +22,16 @@ except ImportError:  # run as a plain file next to the sg_* modules
     import sg_fixes
     import sg_state
 
-# The rules shipped with the package (P43 S3); --checks-dir points elsewhere.
+# The rules shipped with the package; --checks-dir points elsewhere.
 DEFAULT_CHECKS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "checks.d")
 
 
 USAGE = 3
 CRASH = 4
+NODES_ENV = "STACK_GUARDIAN_NODES"
 
 
-def doctor(checks_dir, snapshot, state_path=None, at=None, ctx=None):
+def doctor(checks_dir, snapshot, state_path=None, at=None, ctx=None, record=True):
     """
     Run health checks against a snapshot and return graded findings and exit code.
     
@@ -39,6 +40,7 @@ def doctor(checks_dir, snapshot, state_path=None, at=None, ctx=None):
         snapshot: Dictionary with snapshot data
         state_path: Path to state file (optional)
         at: Timestamp for the run (optional)
+        record: False grades this run against the saved history without saving it
         
     Returns:
         tuple: (graded_findings, exit_code)
@@ -54,7 +56,8 @@ def doctor(checks_dir, snapshot, state_path=None, at=None, ctx=None):
         sg_state.record_run(state, node, findings, at)
         
     graded = [sg_state.grade(state, f.get("node", ""), f) for f in findings]
-    sg_state.save(state, state_path)
+    if record:
+        sg_state.save(state, state_path)
     
     return graded, sg_finding.exit_code(graded)
 
@@ -90,10 +93,14 @@ def real_deps(snapshot, state_dir, audit_path=None, http_timeout=10, run_timeout
             return 0
 
     def run(argv):
+        """(returncode, last 200 chars of stderr): 124 on a timeout, 127 when the program cannot be started."""
         try:  # argv is a list from a declared lane: never a shell string
-            return subprocess.run(list(argv), capture_output=True, timeout=run_timeout, shell=False).returncode  # noqa: S603
-        except (OSError, subprocess.SubprocessError):
-            return 127
+            proc = subprocess.run(list(argv), capture_output=True, timeout=run_timeout, shell=False)  # noqa: S603
+        except subprocess.TimeoutExpired as exc:
+            return 124, _tail(exc.stderr)
+        except (OSError, subprocess.SubprocessError) as exc:
+            return 127, _tail(str(exc))
+        return proc.returncode, _tail(proc.stderr)
 
     def set_env(name, value):
         """Persist NAME=value in <state dir>/env (replacing any earlier line) and set it for this process."""
@@ -119,6 +126,12 @@ def real_deps(snapshot, state_dir, audit_path=None, http_timeout=10, run_timeout
 
     return {"snapshot": lambda: snapshot, "save_snapshot": save_snapshot, "http": http, "run": run, "set_env": set_env,
             "audit": audit, "now": lambda: datetime.now(timezone.utc).isoformat(timespec="seconds")}
+
+
+def _tail(err, keep=200):
+    if isinstance(err, bytes):
+        err = err.decode("utf-8", errors="replace")
+    return (err or "").strip()[-keep:]
 
 
 def pick_fix_finding(findings, ident):
@@ -157,7 +170,8 @@ def main(argv=None):
     d = sub.add_parser("doctor")
     d.add_argument("--checks-dir", default=DEFAULT_CHECKS_DIR, help="folder of check files (default: the shipped rules)")
     d.add_argument("--snapshot", help="a snapshot JSON file")
-    d.add_argument("--nodes", help="a nodes JSON file: collect a live snapshot instead of reading one")
+    d.add_argument("--nodes", help="a nodes JSON file: collect a live snapshot instead of reading one "
+                                   "(default $STACK_GUARDIAN_NODES when neither --snapshot nor --nodes is given)")
     d.add_argument("--ctx", help="a JSON file of rule settings (expect, thresholds)")
     d.add_argument("--state", help="state file (default $STACK_GUARDIAN_STATE or ~/.stack-guardian/state.json)")
     d.add_argument("--json", action="store_true")
@@ -172,8 +186,10 @@ def main(argv=None):
         args = parser.parse_args(argv)
         if args.command not in ("doctor", "snapshot"):
             raise ValueError("a command is required: doctor | snapshot")
+        if args.command == "doctor" and not (args.snapshot or args.nodes):
+            args.nodes = os.environ.get(NODES_ENV) or None
         if args.command == "doctor" and bool(args.snapshot) == bool(args.nodes):
-            raise ValueError("doctor needs exactly one of --snapshot FILE or --nodes FILE")
+            raise ValueError("doctor needs exactly one of --snapshot FILE or --nodes FILE (or %s)" % NODES_ENV)
         if args.command == "doctor" and not args.fix and (args.apply or args.config or args.audit):
             raise ValueError("--apply, --config and --audit need --fix ID")
     except ValueError as exc:
@@ -217,28 +233,28 @@ def _selftest():
             fh.write("import sg_finding as F\n"
                      "def down(s, c):\n"
                      "    if not s['up']:\n"
-                     "        return F.make_finding('svc.down', 'missing', 'FAIL', 'node1', 'service down')\n"
+                     "        return F.make_finding('service.down', 'missing', 'FAIL', 'gpu-box-2', 'service down')\n"
                      "    return None\n"
-                     "CHECKS = [('svc.down', down)]\n")
+                     "CHECKS = [('service.down', down)]\n")
         snap_down = os.path.join(tmp, "down.json")
         snap_up = os.path.join(tmp, "up.json")
         with open(snap_down, "w", encoding="utf-8") as fh:
-            json.dump({"up": False, "nodes": {"node1": {}}}, fh)
+            json.dump({"up": False, "nodes": {"gpu-box-2": {}}}, fh)
         with open(snap_up, "w", encoding="utf-8") as fh:
-            json.dump({"up": True, "nodes": {"node1": {}}}, fh)
+            json.dump({"up": True, "nodes": {"gpu-box-2": {}}}, fh)
         state = os.path.join(tmp, "state.json")
 
         def t_fail_exit_2_and_likely():
-            f, code = doctor(checks, {"up": False, "nodes": {"node1": {}}}, state, at="t1")
+            f, code = doctor(checks, {"up": False, "nodes": {"gpu-box-2": {}}}, state, at="t1")
             return code == 2 and f[0]["confidence"] == "LIKELY"
 
         def t_second_run_verified():
-            f, code = doctor(checks, {"up": False, "nodes": {"node1": {}}}, state, at="t2")
+            f, code = doctor(checks, {"up": False, "nodes": {"gpu-box-2": {}}}, state, at="t2")
             return code == 2 and f[0]["confidence"] == "VERIFIED"
 
         def t_ok_run_records_clean():
-            f, code = doctor(checks, {"up": True, "nodes": {"node1": {}}}, state, at="t3")
-            return code == 0 and f == [] and sg_state.streak(sg_state.load(state), "node1", "svc.down") == 0
+            f, code = doctor(checks, {"up": True, "nodes": {"gpu-box-2": {}}}, state, at="t3")
+            return code == 0 and f == [] and sg_state.streak(sg_state.load(state), "gpu-box-2", "service.down") == 0
 
         def t_main_json():
             return main(["doctor", "--checks-dir", checks, "--snapshot", snap_up, "--state", state, "--json"]) == 0

@@ -1,7 +1,6 @@
-// @job: wq1004-sg-dsh (P43 S6, C-DSH) -- ox try 1 via the work queue; probe 9/9 on Windows; contract + probe by O5 2026-10-04
-// stack-guardian DSH plugin (P43 S6, C-DSH): one start-of-session line when the stack doctor reports WARN/FAIL.
-// agent/session-start starts `stack-guardian doctor --json --quiet`; the first agent/pre-step adds the line
-// (within budgetMs); OK/INFO, a timeout or a bad report add nothing. Zero DSH imports.
+// stack-guardian DSH plugin: one start-of-session line when the stack doctor reports WARN/FAIL.
+// agent/session-start starts `stack-guardian doctor --json --quiet` (it reads the nodes file from $STACK_GUARDIAN_NODES);
+// the first agent/pre-step adds the line (within budgetMs); OK/INFO, a timeout or a bad report add nothing. Zero DSH imports.
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
@@ -134,8 +133,8 @@ export function apply(ctx, config = {}) {
 }
 
 export async function selftest() {
-  const WARN = { findings: [{ level: "OK", node: "node1", summary: "fine" }, { level: "WARN", node: "atlas", summary: "model not loaded", code: "model.not_loaded" }] };
-  const FAIL = { findings: [{ level: "WARN", node: "atlas", summary: "relayed" }, { level: "FAIL", node: "svc", summary: "Ollama does not answer" }] };
+  const WARN = { findings: [{ level: "OK", node: "gpu-box-2", summary: "fine" }, { level: "WARN", node: "gpu-box", summary: "model not loaded", code: "model.not_loaded" }] };
+  const FAIL = { findings: [{ level: "WARN", node: "gpu-box", summary: "relayed" }, { level: "FAIL", node: "home-server", summary: "Ollama does not answer" }] };
   const never = () => new Promise(() => {});
   const now = () => Promise.resolve();
   const guardWith = (run, sleep, logs) => createGuard({ run, sleep, budgetMs: 50, log: (l) => logs.push(l) });
@@ -144,8 +143,8 @@ export async function selftest() {
     ["worst_level", () => worstLevel([]) === "OK" && worstLevel(WARN.findings) === "WARN" && worstLevel(FAIL.findings) === "FAIL" && worstLevel([{ level: "INFO" }]) === "INFO"],
     ["parse_report", () => parseReport(JSON.stringify(WARN)) !== null && parseReport("not json") === null && parseReport("{\"x\":1}") === null],
     ["ok_and_info_add_nothing", () => buildLine({ findings: [{ level: "OK" }] }) === null && buildLine({ findings: [{ level: "INFO", node: "a", summary: "b" }] }) === null],
-    ["warn_line_exact", () => buildLine(WARN) === "[stack-guardian] WARN: 1 issue(s) — atlas: model not loaded (run \"stack-guardian doctor\" for details)"],
-    ["fail_first", () => buildLine(FAIL) === "[stack-guardian] FAIL: 2 issue(s) — svc: Ollama does not answer; atlas: relayed (run \"stack-guardian doctor\" for details)"],
+    ["warn_line_exact", () => buildLine(WARN) === "[stack-guardian] WARN: 1 issue(s) — gpu-box: model not loaded (run \"stack-guardian doctor\" for details)"],
+    ["fail_first", () => buildLine(FAIL) === "[stack-guardian] FAIL: 2 issue(s) — home-server: Ollama does not answer; gpu-box: relayed (run \"stack-guardian doctor\" for details)"],
     ["max_chars", () => { const big = { findings: Array.from({ length: 40 }, (_, i) => ({ level: "WARN", node: "n" + i, summary: "x".repeat(30) })) }; const l = buildLine(big); return l.length === 400 && l.endsWith("…"); }],
     ["guard_warn_once", async () => { const logs = []; const g = guardWith(() => ({ code: 1, stdout: JSON.stringify(WARN) }), never, logs); g.start("a"); const first = await g.lineFor("a"); const second = await g.lineFor("a"); return first.startsWith("[stack-guardian] WARN") && second === null && logs.length === 0; }],
     ["guard_start_twice", () => { const g = guardWith(() => ({}), never, []); return g.start("a") === true && g.start("a") === false; }],

@@ -1,4 +1,4 @@
 {
-  "expect": {"atlas": {"model": "qwen3-coder:30b"}},
+  "expect": {"gpu-box-2": {"model": "qwen3-coder:30b"}},
   "vram_unattributed_mib": 2048
 }
