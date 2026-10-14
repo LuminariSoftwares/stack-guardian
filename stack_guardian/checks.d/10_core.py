@@ -92,6 +92,22 @@ def model_expiring(snapshot, ctx):
     return out
 
 
+def model_slow_ttft(snapshot, ctx):
+    """INFO when a --ttft probe took longer than ttft_slow_ms (default 2000) to the first token."""
+    limit = int((ctx or {}).get("ttft_slow_ms", 2000))
+    out = []
+    for name, node in _nodes(snapshot):
+        slow = [((m or {}).get("name"), (m or {}).get("ttft_ms")) for ep in (node.get("ollama") or [])
+                for m in ((ep or {}).get("running") or [])]
+        slow = [(model, ms) for model, ms in slow if isinstance(ms, (int, float)) and ms > limit]
+        if slow:
+            out.append(F.make_finding("model.slow_ttft", "partial", "INFO", name,
+                                      "%d model(s) slower than %d ms to first token: %s" % (len(slow), limit, ", ".join(m for m, _ in slow)),
+                                      evidence=["%s %s: %d ms to first token" % (name, model, ms) for model, ms in slow],
+                                      try_=["check the model fits in VRAM (no CPU offload)", "check nothing else is generating on that GPU"]))
+    return out
+
+
 def vram_unattributed(snapshot, ctx):
     limit = int((ctx or {}).get("vram_unattributed_mib", 2048))
     out = []
@@ -142,6 +158,7 @@ CHECKS = [
     ("ollama.unreachable", ollama_unreachable),
     ("model.not_loaded", model_not_loaded),
     ("model.expiring", model_expiring),
+    ("model.slow_ttft", model_slow_ttft),
     ("vram.unattributed", vram_unattributed),
     ("gpu.unavailable", gpu_unavailable),
     ("tailnet.unavailable", tailnet_unavailable),

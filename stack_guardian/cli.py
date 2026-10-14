@@ -122,6 +122,11 @@ def watch(run_once, interval, sleep=time.sleep, out=None, err=None, now=_utcnow,
     return 0
 
 
+def _live(nodes, ttft=False):
+    """A live snapshot; with ttft the per-node deadline grows to cover the 1-token generation."""
+    return sg_collect.snapshot(nodes, ttft=True, timeout_s=30.0) if ttft else sg_collect.snapshot(nodes)
+
+
 def _state_dir(state_path):
     """Folder holding snapshots/, fixes.jsonl and env next to the state file."""
     return os.path.dirname(os.path.abspath(state_path)) if state_path else os.path.dirname(os.path.abspath(sg_state.state_path()))
@@ -240,9 +245,12 @@ def main(argv=None):
     d.add_argument("--apply", action="store_true", help="with --fix: really perform it (snapshot first, one audit line after)")
     d.add_argument("--config", help="with --fix: JSON file {\"lanes\": {name: [argv...]}} declaring the lanes restart_lane may run")
     d.add_argument("--audit", help="with --fix --apply: audit file (default fixes.jsonl next to the state file)")
+    d.add_argument("--ttft", action="store_true", help="with --nodes: also time a 1-token generation on each loaded "
+                                                       "Ollama model (costs a generation; never on by default)")
     d.add_argument("--watch", type=float, metavar="N", help="re-run every N seconds, printing only findings that changed state; Ctrl+C stops")
     s = sub.add_parser("snapshot")
     s.add_argument("--nodes", required=True)
+    s.add_argument("--ttft", action="store_true", help="also time a 1-token generation on each loaded Ollama model")
     try:
         args = parser.parse_args(argv)
         if args.command not in ("doctor", "snapshot"):
@@ -253,6 +261,8 @@ def main(argv=None):
             raise ValueError("doctor needs exactly one of --snapshot FILE or --nodes FILE (or %s)" % NODES_ENV)
         if args.command == "doctor" and not args.fix and (args.apply or args.config or args.audit):
             raise ValueError("--apply, --config and --audit need --fix ID")
+        if args.command == "doctor" and args.ttft and not args.nodes:
+            raise ValueError("--ttft probes live nodes: it needs --nodes FILE (or %s), not --snapshot" % NODES_ENV)
         if args.command == "doctor" and args.watch is not None and (args.watch <= 0 or args.fix):
             raise ValueError("--watch needs N > 0 seconds and cannot be combined with --fix")
     except ValueError as exc:
@@ -263,15 +273,15 @@ def main(argv=None):
             with open(path, encoding="utf-8") as fh:
                 return json.load(fh)
         if args.command == "snapshot":
-            print(json.dumps(sg_collect.snapshot(read(args.nodes)), indent=1))
+            print(json.dumps(_live(read(args.nodes), args.ttft), indent=1))
             return 0
         ctx = read(args.ctx) if args.ctx else {}
         if args.watch:
             def run_once():
-                snap = read(args.snapshot) if args.snapshot else sg_collect.snapshot(read(args.nodes))
+                snap = read(args.snapshot) if args.snapshot else _live(read(args.nodes), args.ttft)
                 return doctor(args.checks_dir, snap, args.state, ctx=ctx)[0]
             return watch(run_once, args.watch, as_json=args.json)
-        snapshot = read(args.snapshot) if args.snapshot else sg_collect.snapshot(read(args.nodes))
+        snapshot = read(args.snapshot) if args.snapshot else _live(read(args.nodes), args.ttft)
         findings, code = doctor(args.checks_dir, snapshot, args.state, ctx=ctx)
         if args.fix:
             target, why = pick_fix_finding(findings, args.fix)
