@@ -51,6 +51,9 @@ stack-guardian doctor --snapshot examples/snapshot.json --ctx examples/ctx.json
 - **DSH plugin** (`npm install dsh-stack-guardian`, source in `dsh/`, Node 20+): adds one line at the start of a DeepSeek Harness session when the doctor reports
   WARN or FAIL, and nothing otherwise. It runs `stack-guardian doctor --json --quiet`, so set `STACK_GUARDIAN_NODES`
   to your nodes file in the harness environment.
+- **Watching and scraping:** `stack-guardian doctor --watch 30 --json` prints one JSON object per finding that changes
+  state (new, resolved, severity change), so an agent can tail it; `stack-guardian-serve --nodes FILE` also answers
+  `GET /metrics` in Prometheus text format.
 
 ## What it does
 
@@ -70,9 +73,36 @@ the model each node is expected to hold), `--state FILE` (default `$STACK_GUARDI
 
 Exit codes: `0` all OK/INFO, `1` a WARN, `2` a FAIL, `3` usage, `4` the doctor itself crashed.
 
-Shipped rules: `node.unreachable`, `ollama.unreachable`, `model.not_loaded`, `vram.unattributed`, `gpu.unavailable`,
-`tailnet.unavailable`, `tailnet.peer_offline`, `tailnet.relayed`. Each raises one finding per affected node. A rule that
+Shipped rules: `node.unreachable`, `ollama.unreachable`, `model.not_loaded`, `model.expiring`, `model.slow_ttft`,
+`vram.unattributed`, `gpu.unavailable`, `tailnet.unavailable`, `tailnet.peer_offline`, `tailnet.relayed`. Each raises one finding per affected node. A rule that
 raises becomes a `check.crashed` WARN - a buggy rule never reports a broken stack.
+
+**LM Studio, vLLM, llama.cpp server.** Give the node `"kind": "openai"` and list its base URLs under `endpoints`.
+It is read from `GET /v1/models` (and `GET /v1/models/<id>` when the server has it) into the same shape as an Ollama
+endpoint, so every rule above applies; a model a server lists as unloaded does not count as loaded.
+
+```
+{"gpu-box": {"kind": "openai", "endpoints": ["http://127.0.0.1:1234"]}}
+```
+
+**`model.expiring`** (WARN): a loaded Ollama model whose `/api/ps` `expires_at` is within 60 s of the snapshot time;
+INFO when `/api/ps` is unavailable. Change the window with `"model_expiring_s": 120` in `--ctx`.
+
+**`--watch N`** re-runs the doctor every N seconds and prints only the findings that changed state, each with a
+timestamp. Ctrl+C exits `0` with a one-line summary. With `--json`, each change is one JSON object on stdout.
+
+```
+stack-guardian doctor --nodes examples/nodes.json --watch 30
+```
+
+**`--ttft`** sends a 1-token generation to every loaded model on each Ollama endpoint and records `ttft_ms` on the
+model in the snapshot. It costs a generation, so it never runs unless you pass it, and it needs `--nodes`. The probe
+keeps each model's unload time as it was. `model.slow_ttft` (INFO) fires above 2000 ms; change it with
+`"ttft_slow_ms": 1500` in `--ctx`.
+
+```
+stack-guardian doctor --nodes examples/nodes.json --ttft
+```
 
 ### 2. `doctor --fix ID` - run a finding's typed fix
 
@@ -97,10 +127,17 @@ success, `1` refused or failed, `3` usage.
 
 ### 3. Other commands
 
-- `stack-guardian snapshot --nodes FILE` prints the raw snapshot the rules read.
-- `stack-guardian-serve --nodes FILE [--port 8788]` serves a fresh snapshot at `GET /snapshot` (read-only, loopback
-  unless you pass `--host H --allow-remote`), so one machine can ask another for its health.
+- `stack-guardian snapshot --nodes FILE [--ttft]` prints the raw snapshot the rules read.
+- `stack-guardian-serve --nodes FILE [--ctx FILE] [--port 8788]` serves a fresh snapshot at `GET /snapshot` (read-only,
+  loopback unless you pass `--host H --allow-remote`), so one machine can ask another for its health.
   no auth: bind to localhost or a tailnet IP only.
+- The same server answers `GET /metrics` in Prometheus text format, running the shipped rules on a fresh snapshot:
+  `stack_guardian_finding{code,severity,node}` (1 while raised, 0 once resolved),
+  `stack_guardian_worst_severity` (0 OK, 1 INFO, 2 WARN, 3 FAIL) and `stack_guardian_last_run_timestamp`.
+
+  ```
+  curl http://127.0.0.1:8788/metrics
+  ```
 - `stack-guardian-mcp --nodes FILE [--ctx FILE] [--state FILE] [--ttl SECONDS]`: see [For coding agents](#for-coding-agents).
 
 ## Writing a rule
