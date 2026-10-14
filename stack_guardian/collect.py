@@ -10,6 +10,7 @@ import json
 import subprocess
 import sys
 import time
+import urllib.parse
 import urllib.request
 
 try:
@@ -61,6 +62,51 @@ def collect_ollama(url, http_get=None, clock=None):
     return out
 
 
+# Model states that mean "listed but not in memory": llama.cpp router status.value, LM Studio state.
+_NOT_LOADED = {"unloaded", "loading", "not-loaded", "not_loaded"}
+_MAX_PER_MODEL = 16
+
+
+def _openai_loaded(model):
+    """False when the record says the model is not in memory; a plain OpenAI record (vLLM, llama.cpp) is loaded."""
+    status = model.get("status")
+    state = status.get("value") if isinstance(status, dict) else model.get("state")
+    return not (isinstance(state, str) and state.lower() in _NOT_LOADED)
+
+
+def collect_openai(url, http_get=None, clock=None):
+    """Probe one OpenAI-compatible endpoint (LM Studio, vLLM, llama.cpp server) into the collect_ollama shape.
+
+    GET /v1/models lists the models; GET /v1/models/<id>, when the server has it, may refine a model's state.
+    A model is "running" unless its record says it is not loaded. size_vram and expires_at are unknown here.
+    """
+    http_get = http_get or default_http_get
+    clock = clock or time.monotonic
+    base = url.rstrip("/")
+    out = {"url": base, "kind": "openai", "version": None, "models": [], "running": [], "latency_ms": None, "error": None}
+    try:
+        t0 = clock()
+        status, body = http_get(base + "/v1/models")
+        out["latency_ms"] = int(round((clock() - t0) * 1000))
+        if status != 200:
+            raise ValueError("HTTP %s on /v1/models" % status)
+        data = json.loads(body).get("data") or []
+        records = [m for m in data if isinstance(m, dict) and isinstance(m.get("id"), str) and m["id"]]
+        for i, model in enumerate(records[:_MAX_PER_MODEL]):
+            try:
+                one_status, one_body = http_get(base + "/v1/models/" + urllib.parse.quote(model["id"], safe=""))
+                one = json.loads(one_body) if one_status == 200 else None
+            except Exception:  # noqa: BLE001 - the per-model endpoint is optional
+                one = None
+            if isinstance(one, dict):
+                records[i] = dict(model, **one)
+        out["models"] = [m["id"] for m in records]
+        out["running"] = [{"name": m["id"], "size_vram": 0, "expires_at": ""} for m in records if _openai_loaded(m)]
+    except Exception as exc:
+        out["error"] = ("%s: %s" % (type(exc).__name__, exc))[:200]
+    return out
+
+
 def collect_gpus(run=None):
     """Describe the local GPUs and their attributed compute processes."""
     return collect_gpus_status(run)[0]
@@ -95,7 +141,10 @@ def snapshot(nodes, run=None, http_get=None, now=None, clock=None, timeout_s=10.
         import multinode as sg_multinode
 
     def one(name, cfg):
-        ollama = [collect_ollama(u, http_get=http_get, clock=clock) for u in (cfg.get("ollama") or [])]
+        if cfg.get("kind") == "openai":
+            ollama = [collect_openai(u, http_get=http_get, clock=clock) for u in (cfg.get("endpoints") or [])]
+        else:
+            ollama = [collect_ollama(u, http_get=http_get, clock=clock) for u in (cfg.get("ollama") or [])]
         ok = [o for o in ollama if o["error"] is None]
         node = {"reachable": bool(ok), "latency_ms": ok[0]["latency_ms"] if ok else None, "ollama": ollama}
         if cfg.get("local"):
@@ -122,7 +171,7 @@ def _selftest():
     def http_dead(url, timeout=5):
         raise OSError("connection refused")
 
-    ticks = iter([10.0, 10.042, 20.0, 20.5])
+    ticks = iter([10.0, 10.042, 20.0, 20.5, 30.0, 30.1])
 
     def clock():
         return next(ticks)
@@ -145,6 +194,14 @@ def _selftest():
     def t_ollama_dead():
         o = collect_ollama("http://x:11434", http_get=http_dead)
         return o["version"] is None and o["models"] == [] and o["error"].startswith("OSError: connection refused")
+
+    def t_openai_ok():
+        def http(url, timeout=5):
+            if url.endswith("/v1/models"):
+                return 200, '{"object": "list", "data": [{"id": "a", "status": {"value": "loaded"}}, {"id": "b", "status": {"value": "unloaded"}}]}'
+            return 404, ""
+        o = collect_openai("http://gpu-box:8080/", http_get=http, clock=clock)
+        return o["kind"] == "openai" and o["models"] == ["a", "b"] and [m["name"] for m in o["running"]] == ["a"] and o["error"] is None
 
     def t_gpus():
         g = collect_gpus(run=run_ok)
@@ -174,6 +231,7 @@ def _selftest():
     checks = [
         ("ollama_ok", t_ollama_ok),
         ("ollama_dead", t_ollama_dead),
+        ("openai_ok", t_openai_ok),
         ("gpus", t_gpus),
         ("no_nvidia_smi", t_no_nvidia_smi),
         ("tailnet", t_tailnet),
