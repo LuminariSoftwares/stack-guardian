@@ -8,15 +8,60 @@ remote bind with allow_remote=True.
 
 import http.server
 import json
+import os
 import sys
+import threading
+import time
 
 LOOPBACK = ("127.0.0.1", "::1", "localhost")
 
-_READ_ONLY = {"error": "read-only: GET /snapshot or /health"}
+_READ_ONLY = {"error": "read-only: GET /snapshot, /metrics or /health"}
+PROM_CONTENT_TYPE = "text/plain; version=0.0.4; charset=utf-8"
 
 
-def make_handler(get_snapshot):
-    """Return a BaseHTTPRequestHandler subclass bound to get_snapshot."""
+def _label(value):
+    """Escape a Prometheus label value: backslash, double quote and newline."""
+    return str(value).replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+
+
+class Metrics:
+    """Runs the rules on each snapshot and renders Prometheus text. A finding series seen once stays in the output
+    at 0 after it resolves, so a gauge drops to 0 instead of vanishing."""
+
+    def __init__(self, checks_dir=None, ctx=None, clock=time.time):
+        from . import core as sg_core
+        from . import finding as sg_finding
+        self._core, self._finding = sg_core, sg_finding
+        self.checks_dir = checks_dir or os.path.join(os.path.dirname(os.path.abspath(__file__)), "checks.d")
+        self.ctx = ctx or {}
+        self.clock = clock
+        self._seen = {}  # (code, severity, node) -> 0/1, in first-seen order
+        self._lock = threading.Lock()
+
+    def render(self, snapshot):
+        findings = self._core.run_all(self._core.load_checks(self.checks_dir), snapshot, self.ctx)
+        worst = self._finding.LEVELS.index(self._finding.worst(findings))
+        with self._lock:
+            for key in self._seen:
+                self._seen[key] = 0
+            for f in findings:
+                self._seen[(f.get("code"), f.get("level"), f.get("node", ""))] = 1
+            series = sorted(self._seen.items(), key=lambda kv: tuple(map(str, kv[0])))
+        lines = ["# HELP stack_guardian_finding 1 while a finding is raised, 0 once it has resolved.",
+                 "# TYPE stack_guardian_finding gauge"]
+        lines += ['stack_guardian_finding{code="%s",severity="%s",node="%s"} %d' % (_label(c), _label(s), _label(n), v)
+                  for (c, s, n), v in series]
+        lines += ["# HELP stack_guardian_worst_severity Worst finding of the last run: 0 OK, 1 INFO, 2 WARN, 3 FAIL.",
+                  "# TYPE stack_guardian_worst_severity gauge",
+                  "stack_guardian_worst_severity %d" % worst,
+                  "# HELP stack_guardian_last_run_timestamp Unix time of the last run, in seconds.",
+                  "# TYPE stack_guardian_last_run_timestamp gauge",
+                  "stack_guardian_last_run_timestamp %s" % repr(float(self.clock()))]
+        return "\n".join(lines) + "\n"
+
+
+def make_handler(get_snapshot, metrics=None):
+    """Return a BaseHTTPRequestHandler subclass bound to get_snapshot (and a Metrics for /metrics, if given)."""
 
     class Handler(http.server.BaseHTTPRequestHandler):
         server_version = "stack-guardian-serve"
@@ -35,6 +80,17 @@ def make_handler(get_snapshot):
             path = self.path.split("?", 1)[0]
             if path == "/health":
                 self._reply(200, {"ok": True})
+            elif path == "/metrics" and metrics is not None:
+                try:
+                    body = metrics.render(get_snapshot()).encode("utf-8")
+                except Exception as exc:  # noqa: BLE001 - report, never crash the server
+                    self._reply(500, {"error": "%s: %s" % (type(exc).__name__, exc)})
+                    return
+                self.send_response(200)
+                self.send_header("Content-Type", PROM_CONTENT_TYPE)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
             elif path == "/snapshot":
                 try:
                     snapshot = get_snapshot()
@@ -69,11 +125,11 @@ def make_handler(get_snapshot):
     return Handler
 
 
-def make_server(get_snapshot, host="127.0.0.1", port=0, allow_remote=False):
+def make_server(get_snapshot, host="127.0.0.1", port=0, allow_remote=False, metrics=None):
     """Build (but do not start) a threaded server, refusing non-loopback binds."""
     if host not in LOOPBACK and not allow_remote:
         raise ValueError("refusing to bind %s without allow_remote=True" % host)
-    return http.server.ThreadingHTTPServer((host, port), make_handler(get_snapshot))
+    return http.server.ThreadingHTTPServer((host, port), make_handler(get_snapshot, metrics))
 
 
 def _opt(argv, name):
@@ -91,7 +147,7 @@ def main(argv=None):
         return _selftest()
     nodes = _opt(argv, "--nodes")
     if nodes is None:
-        print("stack-guardian-serve: usage: --nodes FILE [--port N] [--host H --allow-remote]",
+        print("stack-guardian-serve: usage: --nodes FILE [--ctx FILE] [--port N] [--host H --allow-remote]",
               file=sys.stderr)
         return 3
     from . import collect as sg_collect
@@ -100,9 +156,13 @@ def main(argv=None):
         with open(nodes, encoding="utf-8") as fh:
             return sg_collect.snapshot(json.load(fh))
 
+    ctx = None
+    if _opt(argv, "--ctx"):
+        with open(_opt(argv, "--ctx"), encoding="utf-8") as fh:
+            ctx = json.load(fh)
     server = make_server(snap, _opt(argv, "--host") or "127.0.0.1",
-                         int(_opt(argv, "--port") or "8788"), "--allow-remote" in argv)
-    print("serving http://%s:%d/snapshot" % server.server_address[:2], flush=True)
+                         int(_opt(argv, "--port") or "8788"), "--allow-remote" in argv, metrics=Metrics(ctx=ctx))
+    print("serving http://%s:%d/snapshot and /metrics" % server.server_address[:2], flush=True)
     server.serve_forever()
     return 0
 
