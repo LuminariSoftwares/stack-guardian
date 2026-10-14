@@ -10,6 +10,7 @@ import json
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -54,9 +55,14 @@ def collect_ollama(url, http_get=None, clock=None):
         status, body = http_get(base + "/api/tags")
         if status == 200:
             out["models"] = [m["name"] for m in (json.loads(body).get("models") or []) if isinstance(m, dict) and m.get("name")]
-        status, body = http_get(base + "/api/ps")
+        try:
+            status, body = http_get(base + "/api/ps")
+        except urllib.error.HTTPError as exc:  # urlopen raises on 4xx/5xx: an Ollama without /api/ps still answers
+            status, body = exc.code, ""
         if status == 200:
             out["running"] = sg_parsers.parse_ollama_ps(body)
+        else:
+            out["ps_error"] = "HTTP %s on /api/ps" % status
     except Exception as exc:
         out["error"] = ("%s: %s" % (type(exc).__name__, exc))[:200]
     return out

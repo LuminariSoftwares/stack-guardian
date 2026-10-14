@@ -14,7 +14,7 @@
     "gpu-box-2": {
       "reachable": true,
       "latency_ms": 38,
-      "ollama": [{"url": "http://100.64.0.2:11434", "error": null, "running": [{"name": "qwen3:8b"}]}],
+      "ollama": [{"url": "http://100.64.0.2:11434", "error": null, "running": [{"name": "qwen3:8b", "expires_at": "2026-10-10T20:00:30+00:00"}]}],
       "tailnet": {"peer": true, "direct": false, "derp": "ord", "ips": ["100.64.0.2"]}
     },
     "home-server": {"reachable": false, "error": "timeout after 10.0s", "ollama": []},
