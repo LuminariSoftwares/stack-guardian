@@ -64,7 +64,7 @@ def probe_ttft(base, running, post_first=None, clock=None, wall=None):
     """Send a 1-token streamed generation to each loaded model and set its ttft_ms (or ttft_error). Costs a
     generation, so it only runs when asked for (--ttft)."""
     post_first = post_first or default_http_first_line
-    clock = clock or time.monotonic
+    clock = clock or time.perf_counter  # ms measurements: Windows' monotonic clock ticks every ~16 ms
     wall = wall or (lambda: datetime.now(timezone.utc))
     for model in running:
         body = {"model": model.get("name"), "prompt": "hi", "stream": True, "options": {"num_predict": 1}}
@@ -82,7 +82,7 @@ def probe_ttft(base, running, post_first=None, clock=None, wall=None):
 def collect_ollama(url, http_get=None, clock=None, ttft=False, post_first=None):
     """Probe one Ollama endpoint: version, installed models, loaded models (and, with ttft, time to first token)."""
     http_get = http_get or default_http_get
-    clock = clock or time.monotonic
+    clock = clock or time.perf_counter  # ms measurements: Windows' monotonic clock ticks every ~16 ms
     base = url.rstrip("/")
     out = {"url": base, "kind": "ollama", "version": None, "models": [], "running": [], "latency_ms": None, "error": None}
     try:
@@ -129,7 +129,7 @@ def collect_openai(url, http_get=None, clock=None):
     A model is "running" unless its record says it is not loaded. size_vram and expires_at are unknown here.
     """
     http_get = http_get or default_http_get
-    clock = clock or time.monotonic
+    clock = clock or time.perf_counter  # ms measurements: Windows' monotonic clock ticks every ~16 ms
     base = url.rstrip("/")
     out = {"url": base, "kind": "openai", "version": None, "models": [], "running": [], "latency_ms": None, "error": None}
     try:

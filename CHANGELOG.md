@@ -10,6 +10,8 @@
 - **`--ttft`:** opt-in 1-token time-to-first-token probe, with the INFO rule `model.slow_ttft`.
 - **Fix:** an Ollama endpoint whose `/api/ps` answered 4xx/5xx was reported as `ollama.unreachable`; it is now
   reachable with a `ps_error`.
+- **Fix:** `latency_ms` and `ttft_ms` are timed with `perf_counter`; on Windows the monotonic clock ticks every
+  ~16 ms, so short timings came out rounded or under-reported.
 
 ## stack-guardian 0.1.0 / dsh-stack-guardian 0.1.0-alpha.1 (2026-10-10)
 
