@@ -8,6 +8,10 @@
 - **`doctor --watch N`:** prints only findings that changed state; `--json` gives one object per change.
 - **`GET /metrics`** on `stack-guardian-serve`, Prometheus text format.
 - **`--ttft`:** opt-in 1-token time-to-first-token probe, with the INFO rule `model.slow_ttft`.
+- **MCP tool annotations:** `stack_health`, `stack_snapshot` and `explain` declare a `title` and
+  `readOnlyHint`/`destructiveHint`/`idempotentHint`/`openWorldHint` (all read-only; only `explain` stays off the network).
+- **MCP Registry markers:** `mcp-name: io.github.luminarisoftwares/stack-guardian` in the README (and so in the PyPI
+  description) and `mcpName` in `dsh/package.json`, ready for a registry listing.
 - **Fix:** an Ollama endpoint whose `/api/ps` answered 4xx/5xx was reported as `ollama.unreachable`; it is now
   reachable with a `ps_error`.
 - **Fix:** `latency_ms` and `ttft_ms` are timed with `perf_counter`; on Windows the monotonic clock ticks every
