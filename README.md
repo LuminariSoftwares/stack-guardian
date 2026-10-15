@@ -10,7 +10,7 @@ GPUs, tailnet peers), runs small Python rules against it, remembers the last run
 confidence grade: one sample is at most `LIKELY`, the same finding twice in a row is `VERIFIED`. A finding can carry a
 typed fix that you run on purpose, never automatically.
 
-Status: **0.1.0, first release.** Standard library only, Python 3.11+.
+Status: **0.2.1.** Standard library only, Python 3.11+.
 
 ## Install
 
@@ -56,6 +56,42 @@ stack-guardian doctor --snapshot examples/snapshot.json --ctx examples/ctx.json
 - **Watching and scraping:** `stack-guardian doctor --watch 30 --json` prints one JSON object per finding that changes
   state (new, resolved, severity change), so an agent can tail it; `stack-guardian-serve --nodes FILE` also answers
   `GET /metrics` in Prometheus text format.
+
+## MCP server
+
+`stack-guardian-mcp` (also `stack-guardian mcp`) speaks MCP over stdio. It needs a nodes file
+([examples/nodes.json](examples/nodes.json)); give its path with `--nodes FILE` or `STACK_GUARDIAN_NODES`. Optional:
+`--ctx FILE`, `--state FILE`, `--ttl SECONDS` (how long one snapshot is reused, default 10).
+
+Run it without installing anything:
+
+```
+uvx stack-guardian mcp --nodes /path/to/nodes.json
+```
+
+Tools, all read-only (none writes or deletes anything):
+
+| tool | argument | what it returns |
+|---|---|---|
+| `stack_health` | `node` (optional) | graded findings (FAIL/WARN/INFO/OK) with counts, an overall status and what to try; call this first |
+| `stack_snapshot` | `node` (optional) | the raw snapshot the rules read: Ollama endpoints, loaded models, GPUs, tailnet |
+| `explain` | `code` (required) | what one finding code means, what to try and what evidence would settle it |
+
+Claude Desktop (`claude_desktop_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "stack-guardian": {
+      "command": "uvx",
+      "args": ["stack-guardian", "mcp"],
+      "env": {"STACK_GUARDIAN_NODES": "/path/to/nodes.json"}
+    }
+  }
+}
+```
+
+Claude Code: `claude mcp add stack-guardian -e STACK_GUARDIAN_NODES=/path/to/nodes.json -- uvx stack-guardian mcp`.
 
 ## What it does
 
@@ -180,4 +216,4 @@ CI runs this on Ubuntu, Windows and macOS with Python 3.11, plus a privacy scan 
 
 ## License
 
-MIT
+MIT. See [LICENSE](LICENSE).
