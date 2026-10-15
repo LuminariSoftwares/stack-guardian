@@ -1,0 +1,22 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.luminarisoftwares/stack-guardian",
+  "title": "Stack Guardian",
+  "description": "Health doctor for a home AI stack: Ollama nodes, GPUs and tailnet, with graded confidence.",
+  "repository": {"url": "https://github.com/LuminariSoftwares/stack-guardian", "source": "github"},
+  "version": "0.2.0",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "registryBaseUrl": "https://pypi.org",
+      "identifier": "stack-guardian",
+      "version": "0.2.0",
+      "runtimeHint": "uvx",
+      "transport": {"type": "stdio"},
+      "packageArguments": [{"type": "positional", "value": "mcp"}],
+      "environmentVariables": [
+        {"name": "STACK_GUARDIAN_NODES", "description": "Path to your nodes JSON file (see examples/nodes.json)", "isRequired": true, "format": "filepath"}
+      ]
+    }
+  ]
+}

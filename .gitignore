@@ -8,3 +8,7 @@ _archive/
 .pytest_cache/
 dist_release/
 _to_delete_*/
+
+# mcp-publisher binary (MCP Registry publish)
+_tools/
+mcp-publisher.zip

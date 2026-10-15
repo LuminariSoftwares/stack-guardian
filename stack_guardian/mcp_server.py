@@ -13,7 +13,7 @@ import time
 
 PROTOCOL = "2024-11-05"
 SERVER_NAME = "stack-guardian"
-VERSION = "0.1.0.dev0"
+VERSION = "0.2.0"  # keep equal to pyproject.toml version (this module stays package-free)
 _NODE = {"type": "object", "properties": {"node": {"type": "string", "description": "one node name; omit for all"}}}
 
 
