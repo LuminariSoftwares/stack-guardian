@@ -15,13 +15,26 @@ PROTOCOL = "2024-11-05"
 SERVER_NAME = "stack-guardian"
 VERSION = "0.1.0.dev0"
 _NODE = {"type": "object", "properties": {"node": {"type": "string", "description": "one node name; omit for all"}}}
+
+
+def _annotations(title, open_world):
+    """MCP tool annotations. Every tool here only reports: it never writes or deletes, and asking twice changes nothing.
+    open_world is True for a tool that probes the nodes over the network."""
+    return {"title": title, "readOnlyHint": True, "destructiveHint": False, "idempotentHint": True,
+            "openWorldHint": open_world}
+
+
 TOOL_SPECS = [
-    {"name": "stack_health", "description": "Graded health findings (FAIL/WARN/INFO/OK) for the AI stack's nodes, with what to try.",
-     "inputSchema": _NODE},
-    {"name": "stack_snapshot", "description": "The raw snapshot the checks read: Ollama endpoints, loaded models, GPUs, tailnet.",
-     "inputSchema": _NODE},
-    {"name": "explain", "description": "What a finding code means, what to try, and what evidence would settle it.",
-     "inputSchema": {"type": "object", "properties": {"code": {"type": "string"}}, "required": ["code"]}},
+    {"name": "stack_health", "title": "Stack health",
+     "description": "Graded health findings (FAIL/WARN/INFO/OK) for the AI stack's nodes, with what to try.",
+     "inputSchema": _NODE, "annotations": _annotations("Stack health", True)},
+    {"name": "stack_snapshot", "title": "Stack snapshot",
+     "description": "The raw snapshot the checks read: Ollama endpoints, loaded models, GPUs, tailnet.",
+     "inputSchema": _NODE, "annotations": _annotations("Stack snapshot", True)},
+    {"name": "explain", "title": "Explain a finding code",
+     "description": "What a finding code means, what to try, and what evidence would settle it.",
+     "inputSchema": {"type": "object", "properties": {"code": {"type": "string"}}, "required": ["code"]},
+     "annotations": _annotations("Explain a finding code", False)},
 ]
 EXPLAIN = {
     "node.unreachable": {"summary": "The collector got nothing from the node: it timed out or raised.",
