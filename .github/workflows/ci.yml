@@ -45,7 +45,7 @@ jobs:
         run: python -m pip install build && python -m build --outdir dist .
       - name: The PyPI description carries the MCP Registry marker
         run: |
-          python -c "import glob,zipfile;w=glob.glob('dist/*.whl')[0];m=zipfile.ZipFile(w).read([n for n in zipfile.ZipFile(w).namelist() if n.endswith('/METADATA')][0]).decode();assert 'mcp-name: io.github.luminarisoftwares/stack-guardian' in m.splitlines(),'marker missing from wheel METADATA';print('marker present in',w)"
+          python -c "import glob,zipfile;w=glob.glob('dist/*.whl')[0];m=zipfile.ZipFile(w).read([n for n in zipfile.ZipFile(w).namelist() if n.endswith('/METADATA')][0]).decode();assert 'mcp-name: io.github.LuminariSoftwares/stack-guardian' in m.splitlines(),'marker missing from wheel METADATA';print('marker present in',w)"
       - name: Install the wheel in a clean venv and run the example snapshot
         run: |
           python -m venv /tmp/wv

@@ -5,7 +5,7 @@ import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-NAME = "io.github.luminarisoftwares/stack-guardian"
+NAME = "io.github.LuminariSoftwares/stack-guardian"
 
 
 def test_registry_markers_exist_and_agree():
