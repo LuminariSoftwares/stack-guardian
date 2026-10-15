@@ -1,5 +1,9 @@
 # Changelog
 
+## stack-guardian 0.2.1 (2026-10-14)
+
+- **Fix:** the MCP Registry name is `io.github.LuminariSoftwares/stack-guardian` (the registry matches the GitHub owner's case); 0.2.0 carried the lower-case name and could not be published there.
+
 ## stack-guardian 0.2.0 / dsh-stack-guardian 0.1.0-alpha.2 (2026-10-14)
 
 - **`stack-guardian mcp`** starts the MCP server (same as `stack-guardian-mcp`), so `uvx stack-guardian mcp` works; `server.json` for the official MCP Registry.

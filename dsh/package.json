@@ -1,6 +1,6 @@
 {
   "name": "dsh-stack-guardian",
-  "mcpName": "io.github.luminarisoftwares/stack-guardian",
+  "mcpName": "io.github.LuminariSoftwares/stack-guardian",
   "version": "0.1.0-alpha.2",
   "description": "stack-guardian for the DeepSeek Harness: one start-of-session line when the stack doctor reports WARN/FAIL.",
   "type": "module",

@@ -3,7 +3,7 @@
 [![ci](https://github.com/LuminariSoftwares/stack-guardian/actions/workflows/ci.yml/badge.svg)](https://github.com/LuminariSoftwares/stack-guardian/actions/workflows/ci.yml)
 [![privacy](https://github.com/LuminariSoftwares/stack-guardian/actions/workflows/privacy.yml/badge.svg)](https://github.com/LuminariSoftwares/stack-guardian/actions/workflows/privacy.yml)
 
-mcp-name: io.github.luminarisoftwares/stack-guardian
+mcp-name: io.github.LuminariSoftwares/stack-guardian
 
 A health doctor for a home AI stack. It collects a snapshot of your nodes (Ollama endpoints, loaded models, NVIDIA
 GPUs, tailnet peers), runs small Python rules against it, remembers the last runs, and reports findings with a
