@@ -10,7 +10,10 @@ import json
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.parse
 import urllib.request
+from datetime import datetime, timezone
 
 try:
     from . import parsers as sg_parsers
@@ -37,10 +40,49 @@ def default_http_get(url, timeout=5):
         return resp.status, resp.read().decode("utf-8", errors="replace")
 
 
-def collect_ollama(url, http_get=None, clock=None):
-    """Probe one Ollama endpoint: version, installed models, loaded models."""
+def default_http_first_line(url, body, timeout=20):
+    """POST body as JSON and return once the first response line (the first streamed chunk) has arrived."""
+    req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"), method="POST",
+                                 headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 - the URL comes from the nodes file
+        resp.readline()
+
+
+def _keep_alive(expires_at, wall):
+    """The keep_alive that leaves a model's unload time where it was: -1 when it is pinned (Ollama reports a
+    far-future expires_at), else the seconds it has left; None when expires_at does not parse."""
+    try:
+        when = datetime.fromisoformat(str(expires_at).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    when = when if when.tzinfo else when.replace(tzinfo=timezone.utc)
+    left = (when - wall()).total_seconds()
+    return -1 if left > 365 * 86400 else "%ds" % max(1, int(left))
+
+
+def probe_ttft(base, running, post_first=None, clock=None, wall=None):
+    """Send a 1-token streamed generation to each loaded model and set its ttft_ms (or ttft_error). Costs a
+    generation, so it only runs when asked for (--ttft)."""
+    post_first = post_first or default_http_first_line
+    clock = clock or time.perf_counter  # ms measurements: Windows' monotonic clock ticks every ~16 ms
+    wall = wall or (lambda: datetime.now(timezone.utc))
+    for model in running:
+        body = {"model": model.get("name"), "prompt": "hi", "stream": True, "options": {"num_predict": 1}}
+        keep_alive = _keep_alive(model.get("expires_at"), wall)
+        if keep_alive is not None:
+            body["keep_alive"] = keep_alive
+        try:
+            t0 = clock()
+            post_first(base + "/api/generate", body)
+            model["ttft_ms"] = int(round((clock() - t0) * 1000))
+        except Exception as exc:  # noqa: BLE001 - a failed probe is data, never a crash
+            model["ttft_error"] = ("%s: %s" % (type(exc).__name__, exc))[:200]
+
+
+def collect_ollama(url, http_get=None, clock=None, ttft=False, post_first=None):
+    """Probe one Ollama endpoint: version, installed models, loaded models (and, with ttft, time to first token)."""
     http_get = http_get or default_http_get
-    clock = clock or time.monotonic
+    clock = clock or time.perf_counter  # ms measurements: Windows' monotonic clock ticks every ~16 ms
     base = url.rstrip("/")
     out = {"url": base, "kind": "ollama", "version": None, "models": [], "running": [], "latency_ms": None, "error": None}
     try:
@@ -53,9 +95,61 @@ def collect_ollama(url, http_get=None, clock=None):
         status, body = http_get(base + "/api/tags")
         if status == 200:
             out["models"] = [m["name"] for m in (json.loads(body).get("models") or []) if isinstance(m, dict) and m.get("name")]
-        status, body = http_get(base + "/api/ps")
+        try:
+            status, body = http_get(base + "/api/ps")
+        except urllib.error.HTTPError as exc:  # urlopen raises on 4xx/5xx: an Ollama without /api/ps still answers
+            status, body = exc.code, ""
         if status == 200:
             out["running"] = sg_parsers.parse_ollama_ps(body)
+        else:
+            out["ps_error"] = "HTTP %s on /api/ps" % status
+        if ttft:
+            probe_ttft(base, out["running"], post_first=post_first, clock=clock)
+    except Exception as exc:
+        out["error"] = ("%s: %s" % (type(exc).__name__, exc))[:200]
+    return out
+
+
+# Model states that mean "listed but not in memory": llama.cpp router status.value, LM Studio state.
+_NOT_LOADED = {"unloaded", "loading", "not-loaded", "not_loaded"}
+_MAX_PER_MODEL = 16
+
+
+def _openai_loaded(model):
+    """False when the record says the model is not in memory; a plain OpenAI record (vLLM, llama.cpp) is loaded."""
+    status = model.get("status")
+    state = status.get("value") if isinstance(status, dict) else model.get("state")
+    return not (isinstance(state, str) and state.lower() in _NOT_LOADED)
+
+
+def collect_openai(url, http_get=None, clock=None):
+    """Probe one OpenAI-compatible endpoint (LM Studio, vLLM, llama.cpp server) into the collect_ollama shape.
+
+    GET /v1/models lists the models; GET /v1/models/<id>, when the server has it, may refine a model's state.
+    A model is "running" unless its record says it is not loaded. size_vram and expires_at are unknown here.
+    """
+    http_get = http_get or default_http_get
+    clock = clock or time.perf_counter  # ms measurements: Windows' monotonic clock ticks every ~16 ms
+    base = url.rstrip("/")
+    out = {"url": base, "kind": "openai", "version": None, "models": [], "running": [], "latency_ms": None, "error": None}
+    try:
+        t0 = clock()
+        status, body = http_get(base + "/v1/models")
+        out["latency_ms"] = int(round((clock() - t0) * 1000))
+        if status != 200:
+            raise ValueError("HTTP %s on /v1/models" % status)
+        data = json.loads(body).get("data") or []
+        records = [m for m in data if isinstance(m, dict) and isinstance(m.get("id"), str) and m["id"]]
+        for i, model in enumerate(records[:_MAX_PER_MODEL]):
+            try:
+                one_status, one_body = http_get(base + "/v1/models/" + urllib.parse.quote(model["id"], safe=""))
+                one = json.loads(one_body) if one_status == 200 else None
+            except Exception:  # noqa: BLE001 - the per-model endpoint is optional
+                one = None
+            if isinstance(one, dict):
+                records[i] = dict(model, **one)
+        out["models"] = [m["id"] for m in records]
+        out["running"] = [{"name": m["id"], "size_vram": 0, "expires_at": ""} for m in records if _openai_loaded(m)]
     except Exception as exc:
         out["error"] = ("%s: %s" % (type(exc).__name__, exc))[:200]
     return out
@@ -86,16 +180,21 @@ def collect_tailnet(peer_host, run=None):
     return sg_parsers.parse_tailscale(out, peer_host)
 
 
-def snapshot(nodes, run=None, http_get=None, now=None, clock=None, timeout_s=10.0):
+def snapshot(nodes, run=None, http_get=None, now=None, clock=None, timeout_s=10.0, ttft=False, post_first=None):
     """Build the one snapshot dict the checks read, in node input order. Every node is collected at
-    the same time and a node that has not answered within timeout_s is reported down (multinode.pull)."""
+    the same time and a node that has not answered within timeout_s is reported down (multinode.pull).
+    ttft=True also probes each Ollama model's time to first token (a real 1-token generation)."""
     try:
         from . import multinode as sg_multinode
     except ImportError:  # run as a plain file next to the sg_* modules, like cli.py
         import multinode as sg_multinode
 
     def one(name, cfg):
-        ollama = [collect_ollama(u, http_get=http_get, clock=clock) for u in (cfg.get("ollama") or [])]
+        if cfg.get("kind") == "openai":
+            ollama = [collect_openai(u, http_get=http_get, clock=clock) for u in (cfg.get("endpoints") or [])]
+        else:
+            ollama = [collect_ollama(u, http_get=http_get, clock=clock, ttft=ttft, post_first=post_first)
+                      for u in (cfg.get("ollama") or [])]
         ok = [o for o in ollama if o["error"] is None]
         node = {"reachable": bool(ok), "latency_ms": ok[0]["latency_ms"] if ok else None, "ollama": ollama}
         if cfg.get("local"):
@@ -122,7 +221,7 @@ def _selftest():
     def http_dead(url, timeout=5):
         raise OSError("connection refused")
 
-    ticks = iter([10.0, 10.042, 20.0, 20.5])
+    ticks = iter([10.0, 10.042, 20.0, 20.5, 30.0, 30.1])
 
     def clock():
         return next(ticks)
@@ -145,6 +244,14 @@ def _selftest():
     def t_ollama_dead():
         o = collect_ollama("http://x:11434", http_get=http_dead)
         return o["version"] is None and o["models"] == [] and o["error"].startswith("OSError: connection refused")
+
+    def t_openai_ok():
+        def http(url, timeout=5):
+            if url.endswith("/v1/models"):
+                return 200, '{"object": "list", "data": [{"id": "a", "status": {"value": "loaded"}}, {"id": "b", "status": {"value": "unloaded"}}]}'
+            return 404, ""
+        o = collect_openai("http://gpu-box:8080/", http_get=http, clock=clock)
+        return o["kind"] == "openai" and o["models"] == ["a", "b"] and [m["name"] for m in o["running"]] == ["a"] and o["error"] is None
 
     def t_gpus():
         g = collect_gpus(run=run_ok)
@@ -174,6 +281,7 @@ def _selftest():
     checks = [
         ("ollama_ok", t_ollama_ok),
         ("ollama_dead", t_ollama_dead),
+        ("openai_ok", t_openai_ok),
         ("gpus", t_gpus),
         ("no_nvidia_smi", t_no_nvidia_smi),
         ("tailnet", t_tailnet),

@@ -6,6 +6,7 @@ keeps its own streak, matches a node= filter and can be named as code@node.
 """
 
 import sys
+from datetime import datetime, timezone
 
 import sg_finding as F
 
@@ -49,6 +50,61 @@ def model_not_loaded(snapshot, ctx):
             out.append(F.make_finding("model.not_loaded", "partial", "WARN", name,
                                       "expected model not loaded: %s wants %s" % (name, want),
                                       evidence=["%s running: %s" % (name, ", ".join(running) or "nothing")]))
+    return out
+
+
+def _when(text):
+    """An aware datetime from an ISO 8601 string (Ollama writes nanoseconds and a local offset), or None."""
+    try:
+        when = datetime.fromisoformat(str(text).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return when if when.tzinfo else when.replace(tzinfo=timezone.utc)
+
+
+def model_expiring(snapshot, ctx):
+    """WARN when a loaded Ollama model unloads within model_expiring_s (default 60) of the snapshot's taken_at."""
+    limit = float((ctx or {}).get("model_expiring_s", 60))
+    now = _when((snapshot or {}).get("taken_at")) or datetime.now(timezone.utc)
+    out = []
+    for name, node in _nodes(snapshot):
+        soon, blind = [], []
+        for ep in node.get("ollama") or []:
+            ep = ep or {}
+            if ep.get("error") or ep.get("kind", "ollama") != "ollama":
+                continue
+            if ep.get("ps_error"):
+                blind.append("%s %s: %s" % (name, ep.get("url"), ep["ps_error"]))
+                continue
+            for model in ep.get("running") or []:
+                when = _when((model or {}).get("expires_at"))
+                if when is not None and (when - now).total_seconds() <= limit:
+                    soon.append((model.get("name"), int(round((when - now).total_seconds()))))
+        if soon:
+            out.append(F.make_finding("model.expiring", "partial", "WARN", name,
+                                      "%d loaded model(s) unload within %ds: %s" % (len(soon), limit, ", ".join(m for m, _ in soon)),
+                                      evidence=["%s %s: expires in %ds" % (name, model, left) for model, left in soon],
+                                      try_=["send a request with a longer keep_alive", "set OLLAMA_KEEP_ALIVE on that node"]))
+        elif blind:
+            out.append(F.make_finding("model.expiring", "partial", "INFO", name,
+                                      "cannot tell when models unload: /api/ps unavailable", evidence=blind,
+                                      try_=["upgrade Ollama on that node (older releases have no /api/ps)"]))
+    return out
+
+
+def model_slow_ttft(snapshot, ctx):
+    """INFO when a --ttft probe took longer than ttft_slow_ms (default 2000) to the first token."""
+    limit = int((ctx or {}).get("ttft_slow_ms", 2000))
+    out = []
+    for name, node in _nodes(snapshot):
+        slow = [((m or {}).get("name"), (m or {}).get("ttft_ms")) for ep in (node.get("ollama") or [])
+                for m in ((ep or {}).get("running") or [])]
+        slow = [(model, ms) for model, ms in slow if isinstance(ms, (int, float)) and ms > limit]
+        if slow:
+            out.append(F.make_finding("model.slow_ttft", "partial", "INFO", name,
+                                      "%d model(s) slower than %d ms to first token: %s" % (len(slow), limit, ", ".join(m for m, _ in slow)),
+                                      evidence=["%s %s: %d ms to first token" % (name, model, ms) for model, ms in slow],
+                                      try_=["check the model fits in VRAM (no CPU offload)", "check nothing else is generating on that GPU"]))
     return out
 
 
@@ -101,6 +157,8 @@ CHECKS = [
     ("node.unreachable", node_unreachable),
     ("ollama.unreachable", ollama_unreachable),
     ("model.not_loaded", model_not_loaded),
+    ("model.expiring", model_expiring),
+    ("model.slow_ttft", model_slow_ttft),
     ("vram.unattributed", vram_unattributed),
     ("gpu.unavailable", gpu_unavailable),
     ("tailnet.unavailable", tailnet_unavailable),
@@ -144,6 +202,12 @@ def _selftest():
         [rel] = tailnet_relayed(snap(**{"gpu-box": {"tailnet": {"peer": True, "direct": False, "derp": "ord", "ips": []}}}), ctx)
         return off["level"] == "FAIL" and rel["level"] == "INFO" and "ord" in rel["summary"]
 
+    def t_model_expiring():
+        ep = {"url": "http://a:11434", "error": None, "running": [{"name": "qwen3:30b", "expires_at": "1970-01-01T00:00:45Z"}]}
+        [f] = model_expiring({"taken_at": "1970-01-01T00:00:00+00:00", "nodes": {"gpu-box": {"ollama": [ep]}}}, {})
+        [g] = model_expiring({"nodes": {"gpu-box": {"ollama": [dict(ep, ps_error="HTTP 404 on /api/ps")]}}}, {})
+        return f["level"] == "WARN" and "45s" in f["evidence"][0] and g["level"] == "INFO"
+
     def t_empty_snapshot():
         return all(fn({}, {}) == [] for _, fn in CHECKS) and all(fn(None, None) == [] for _, fn in CHECKS)
 
@@ -154,6 +218,7 @@ def _selftest():
         ("unreachable_node_not_blamed_for_model", t_unreachable_node_not_blamed_for_model),
         ("vram_threshold", t_vram_threshold),
         ("tailnet_offline_and_relayed", t_tailnet_offline_and_relayed),
+        ("model_expiring", t_model_expiring),
         ("empty_snapshot", t_empty_snapshot),
     ]
     passed = 0

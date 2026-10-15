@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
@@ -60,6 +61,70 @@ def doctor(checks_dir, snapshot, state_path=None, at=None, ctx=None, record=True
         sg_state.save(state, state_path)
     
     return graded, sg_finding.exit_code(graded)
+
+
+def _utcnow():
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def watch_changes(before, after):
+    """Changes from one run's findings to the next: resolved first, then new and severity changes in rule order."""
+    def by_key(findings):
+        return {(f.get("code"), f.get("node", "")): f for f in findings}
+    old, new = by_key(before), by_key(after)
+    changes = [("resolved", f, None) for key, f in old.items() if key not in new]
+    for key, f in new.items():
+        if key not in old:
+            changes.append(("new", f, None))
+        elif old[key].get("level") != f.get("level"):
+            changes.append(("changed", f, old[key]))
+    return changes
+
+
+def watch(run_once, interval, sleep=time.sleep, out=None, err=None, now=_utcnow, as_json=False):
+    """Run run_once() every interval seconds, printing only the findings that changed state. Ctrl+C exits 0
+    with a one-line summary (on err in JSON mode, so stdout stays one JSON object per change)."""
+    out = out or (lambda line: print(line, flush=True))  # flushed: a watch is often piped into a log
+    err = err or (lambda line: print(line, file=sys.stderr, flush=True))
+    findings, runs, changes = [], 0, 0
+    try:
+        while True:
+            try:
+                current = run_once()
+            except KeyboardInterrupt:
+                raise
+            except Exception as exc:  # noqa: BLE001 - one bad run is reported, the watch goes on
+                err("%s crash: %s: %s" % (now(), type(exc).__name__, exc))
+                current = findings
+            else:
+                runs += 1
+                at = now()
+                for change, f, was in watch_changes(findings, current):
+                    changes += 1
+                    ident = "%s@%s" % (f.get("code"), f.get("node", ""))
+                    if as_json:
+                        level = None if change == "resolved" else f.get("level")
+                        before = f.get("level") if change == "resolved" else (was or {}).get("level")
+                        out(json.dumps({"at": at, "change": "severity" if change == "changed" else change,
+                                        "code": f.get("code"), "node": f.get("node", ""), "level": level,
+                                        "was": before, "summary": f.get("summary")}))
+                    elif change == "resolved":
+                        out("%s resolved %s (was %s)" % (at, ident, f.get("level")))
+                    elif change == "changed":
+                        out("%s changed %s->%s %s: %s" % (at, was.get("level"), f.get("level"), ident, f.get("summary")))
+                    else:
+                        out("%s new %s %s: %s" % (at, f.get("level"), ident, f.get("summary")))
+            findings = current
+            sleep(interval)
+    except KeyboardInterrupt:
+        summary = "watch stopped: %d runs, %d changes, worst now %s" % (runs, changes, sg_finding.worst(findings))
+        (err if as_json else out)(summary)
+    return 0
+
+
+def _live(nodes, ttft=False):
+    """A live snapshot; with ttft the per-node deadline grows to cover the 1-token generation."""
+    return sg_collect.snapshot(nodes, ttft=True, timeout_s=30.0) if ttft else sg_collect.snapshot(nodes)
 
 
 def _state_dir(state_path):
@@ -180,8 +245,12 @@ def main(argv=None):
     d.add_argument("--apply", action="store_true", help="with --fix: really perform it (snapshot first, one audit line after)")
     d.add_argument("--config", help="with --fix: JSON file {\"lanes\": {name: [argv...]}} declaring the lanes restart_lane may run")
     d.add_argument("--audit", help="with --fix --apply: audit file (default fixes.jsonl next to the state file)")
+    d.add_argument("--ttft", action="store_true", help="with --nodes: also time a 1-token generation on each loaded "
+                                                       "Ollama model (costs a generation; never on by default)")
+    d.add_argument("--watch", type=float, metavar="N", help="re-run every N seconds, printing only findings that changed state; Ctrl+C stops")
     s = sub.add_parser("snapshot")
     s.add_argument("--nodes", required=True)
+    s.add_argument("--ttft", action="store_true", help="also time a 1-token generation on each loaded Ollama model")
     try:
         args = parser.parse_args(argv)
         if args.command not in ("doctor", "snapshot"):
@@ -192,6 +261,10 @@ def main(argv=None):
             raise ValueError("doctor needs exactly one of --snapshot FILE or --nodes FILE (or %s)" % NODES_ENV)
         if args.command == "doctor" and not args.fix and (args.apply or args.config or args.audit):
             raise ValueError("--apply, --config and --audit need --fix ID")
+        if args.command == "doctor" and args.ttft and not args.nodes:
+            raise ValueError("--ttft probes live nodes: it needs --nodes FILE (or %s), not --snapshot" % NODES_ENV)
+        if args.command == "doctor" and args.watch is not None and (args.watch <= 0 or args.fix):
+            raise ValueError("--watch needs N > 0 seconds and cannot be combined with --fix")
     except ValueError as exc:
         print("stack-guardian: usage: %s" % exc, file=sys.stderr)
         return USAGE
@@ -200,10 +273,15 @@ def main(argv=None):
             with open(path, encoding="utf-8") as fh:
                 return json.load(fh)
         if args.command == "snapshot":
-            print(json.dumps(sg_collect.snapshot(read(args.nodes)), indent=1))
+            print(json.dumps(_live(read(args.nodes), args.ttft), indent=1))
             return 0
-        snapshot = read(args.snapshot) if args.snapshot else sg_collect.snapshot(read(args.nodes))
         ctx = read(args.ctx) if args.ctx else {}
+        if args.watch:
+            def run_once():
+                snap = read(args.snapshot) if args.snapshot else _live(read(args.nodes), args.ttft)
+                return doctor(args.checks_dir, snap, args.state, ctx=ctx)[0]
+            return watch(run_once, args.watch, as_json=args.json)
+        snapshot = read(args.snapshot) if args.snapshot else _live(read(args.nodes), args.ttft)
         findings, code = doctor(args.checks_dir, snapshot, args.state, ctx=ctx)
         if args.fix:
             target, why = pick_fix_finding(findings, args.fix)
