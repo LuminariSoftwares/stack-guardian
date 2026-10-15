@@ -225,6 +225,9 @@ def main(argv=None):
     """stack-guardian doctor | snapshot. Exit: 0 OK/INFO, 1 WARN, 2 FAIL, 3 usage, 4 crash in the doctor itself."""
     if argv is None:
         argv = sys.argv[1:]
+    if argv[:1] == ["mcp"]:  # `stack-guardian mcp` = stack-guardian-mcp, so `uvx stack-guardian mcp` works (MCP Registry)
+        from stack_guardian import mcp_server
+        return mcp_server.main(argv[1:])
 
     class _Parser(argparse.ArgumentParser):
         def error(self, message):
