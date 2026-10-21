@@ -35,7 +35,7 @@ def test_hint_values_are_truthful(tmp_path):
     # nothing this server exposes writes or deletes: every tool only reports
     for name, ann in by_name.items():
         assert ann["readOnlyHint"] is True and ann["destructiveHint"] is False, name
-    # stack_health and stack_snapshot probe the nodes over the network; explain is a local table lookup
+    # stack_health and stack_snapshot probe the nodes over the network; stack_explain is a local table lookup
     assert by_name["stack_health"]["openWorldHint"] is True
     assert by_name["stack_snapshot"]["openWorldHint"] is True
-    assert by_name["explain"]["openWorldHint"] is False
+    assert by_name["stack_explain"]["openWorldHint"] is False
