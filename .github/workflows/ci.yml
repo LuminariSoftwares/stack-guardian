@@ -57,3 +57,16 @@ jobs:
           set -e
           echo "doctor exit code: $rc"
           python -c "import json;f=json.load(open('/tmp/report.json'));codes=sorted({x['code'] for x in (f if isinstance(f,list) else f.get('findings',[]))});print(len(codes),'codes:',codes);assert len(codes)>=8,codes"
+
+  docker:
+    name: Docker image lists its MCP tools
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: docker build -t stack-guardian .
+      - name: initialize + tools/list over stdio
+        run: |
+          printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
+            | docker run -i --rm stack-guardian > /tmp/replies.jsonl
+          python3 -c "import json;r=[json.loads(l) for l in open('/tmp/replies.jsonl')];names=[t['name'] for t in r[1]['result']['tools']];print(names);assert names==['stack_health','stack_snapshot','explain'],names"

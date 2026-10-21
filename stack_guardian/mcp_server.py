@@ -14,51 +14,10 @@ import time
 PROTOCOL = "2024-11-05"
 SERVER_NAME = "stack-guardian"
 VERSION = "0.2.1"  # keep equal to pyproject.toml version (this module stays package-free)
-_NODE = {"type": "object", "properties": {"node": {"type": "string", "description": (
-    "Name of one node exactly as it is written in the nodes file (for example \"gpu-box\"; case-sensitive). "
-    "Omit it to cover every node. A name that matches no node returns no findings (stack_health) or an error that "
-    "lists the known node names (stack_snapshot).")}}}
-
-
-def _annotations(title, open_world):
-    """MCP tool annotations. Every tool here only reports: it never writes or deletes, and asking twice changes nothing.
-    open_world is True for a tool that probes the nodes over the network."""
-    return {"title": title, "readOnlyHint": True, "destructiveHint": False, "idempotentHint": True,
-            "openWorldHint": open_world}
-
-
-TOOL_SPECS = [
-    {"name": "stack_health", "title": "Stack health",
-     "description": (
-         "Run the health rules over the AI stack's nodes (Ollama endpoints, loaded models, NVIDIA GPUs, tailnet peers) "
-         "and return graded findings (FAIL/WARN/INFO/OK) with per-level counts, an overall status of ok, warn or fail, "
-         "and for each finding a code, the node, and what to try. Read-only: it probes the nodes over the network, "
-         "reuses one snapshot for 10 seconds, needs no credentials, and grades against the saved run history without "
-         "adding to it. Call this first to answer \"is my stack healthy?\". Use stack_snapshot instead when you need the "
-         "raw data behind a finding, and explain to learn what one finding code means."),
-     "inputSchema": _NODE, "annotations": _annotations("Stack health", True)},
-    {"name": "stack_snapshot", "title": "Stack snapshot",
-     "description": (
-         "Return the raw snapshot the health rules read, as JSON: a taken_at timestamp and, per node, the Ollama "
-         "endpoints, loaded models, NVIDIA GPUs and tailnet state. Read-only: it probes the nodes over the network, "
-         "needs no credentials, and reuses one snapshot for 10 seconds, so repeated calls return the same data. Use it "
-         "as evidence when a stack_health finding needs checking; use stack_health instead for graded verdicts and "
-         "what to try, and explain for the meaning of one finding code."),
-     "inputSchema": _NODE, "annotations": _annotations("Stack snapshot", True)},
-    {"name": "explain", "title": "Explain a finding code",
-     "description": (
-         "Look up what one finding code means, what to try, and what evidence would settle it; returns a summary, a "
-         "list of things to try and a list of evidence to collect. A local table lookup: no network, no node access, "
-         "nothing changes. Call it after stack_health reports a code you want explained. An unknown code returns a "
-         "summary saying so plus a hint to run stack_health. Use stack_health to get the current findings and "
-         "stack_snapshot for the raw data."),
-     "inputSchema": {"type": "object", "properties": {"code": {"type": "string", "description": (
-         "A finding code exactly as it appears in the \"code\" field of a stack_health finding, for example "
-         "\"ollama.unreachable\", \"model.expiring\" or \"tailnet.relayed\". Lowercase and dot-separated; "
-         "case-sensitive.")}}, "required": ["code"]},
-     "annotations": _annotations("Explain a finding code", False)},
-]
 EXPLAIN = {
+    "check.crashed": {"summary": "A health rule raised an exception, so its own check did not run; this is a bug in the rule, not a verdict on the stack.",
+                      "try": ["read the exception in the finding's evidence", "fix or remove the rule file in the checks folder"],
+                      "evidence_needed": ["the rule's traceback from stack-guardian doctor --checks-dir DIR --snapshot FILE"]},
     "node.unreachable": {"summary": "The collector got nothing from the node: it timed out or raised.",
                          "try": ["check the machine is on and reachable", "raise the collection timeout if it is just slow"],
                          "evidence_needed": ["the node's error in stack_snapshot"]},
@@ -90,6 +49,67 @@ EXPLAIN = {
                         "try": ["check firewall / UDP 41641", "tailscale netcheck on both ends"],
                         "evidence_needed": ["tailscale ping output showing via DERP or direct"]},
 }
+
+_NODE = {"type": "object", "additionalProperties": False, "properties": {"node": {
+    "type": "string", "maxLength": 200, "default": "", "examples": ["gpu-box", "gpu-box-2"],
+    "description": (
+        "Optional. Name of one node exactly as it is written in the nodes file, for example \"gpu-box\" "
+        "(case-sensitive, no wildcards). Default: "" (or omitted), which covers every node. A name that matches no node "
+        "returns no findings (stack_health) or an error that lists the known node names (stack_snapshot).")}}}
+
+
+def _annotations(title, open_world):
+    """MCP tool annotations. Every tool here only reports: it never writes or deletes, and asking twice changes nothing.
+    open_world is True for a tool that probes the nodes over the network."""
+    return {"title": title, "readOnlyHint": True, "destructiveHint": False, "idempotentHint": True,
+            "openWorldHint": open_world}
+
+
+TOOL_SPECS = [
+    {"name": "stack_health", "title": "Stack health",
+     "description": (
+         "Grade the health of a home AI stack: runs the health rules over every node's Ollama endpoints, loaded "
+         "models, NVIDIA GPUs and tailnet peers. "
+         "When to use: call this first to answer \"is my stack healthy?\" or \"why is my model slow or missing?\". "
+         "Use stack_snapshot instead when you need the raw data behind a finding, and explain to learn what one "
+         "finding code means and how to settle it. "
+         "Behaviour: read-only and needs no credentials. It probes the nodes over the network (HTTP to Ollama, "
+         "nvidia-smi and tailscale on the host), reuses one snapshot for 10 seconds, and grades against the saved run "
+         "history without writing to it, so calling it repeatedly changes nothing. "
+         "Returns JSON: {node, status: \"ok\"|\"warn\"|\"fail\", counts: {FAIL, WARN, INFO, OK}, findings: [{code, "
+         "level, severity, node, summary, evidence, try, confidence: \"VERIFIED\"|\"LIKELY\"|\"INSUFFICIENT\", "
+         "fix}]}; a healthy stack returns status \"ok\" and no WARN or FAIL findings."),
+     "inputSchema": _NODE, "annotations": _annotations("Stack health", True)},
+    {"name": "stack_snapshot", "title": "Stack snapshot",
+     "description": (
+         "Return the raw snapshot the health rules read: per node, its Ollama endpoints and loaded models, NVIDIA "
+         "GPUs with VRAM use and processes, and tailnet peer state. "
+         "When to use: as evidence when a stack_health finding needs checking, or to answer a factual question "
+         "(\"which models are loaded on gpu-box?\", \"how much VRAM is free?\"). Use stack_health instead for graded "
+         "verdicts and what to try, and explain for the meaning of one finding code. "
+         "Behaviour: read-only and needs no credentials. It probes the nodes over the network and reuses one snapshot "
+         "for 10 seconds, so repeated calls within that window return identical data; it writes nothing. "
+         "Returns JSON: {taken_at, nodes: {<name>: {reachable, ollama: [...], gpus: [...], tailnet: {...}}}}; with "
+         "an unknown node it returns {error} naming the known nodes."),
+     "inputSchema": _NODE, "annotations": _annotations("Stack snapshot", True)},
+    {"name": "explain", "title": "Explain a finding code",
+     "description": (
+         "Explain one finding code: what it means, what to try, and what evidence would settle it. "
+         "When to use: after stack_health reports a code you want to act on or explain to the user. Use stack_health "
+         "to get the current findings and stack_snapshot for the raw data; explain never looks at the stack itself. "
+         "Behaviour: a local table lookup with no network, no node access and no side effects. "
+         "Returns JSON: {summary, try: [string], evidence_needed: [string]}. A code it does not know (for example "
+         "one from a custom rule) returns a summary saying so and a hint to run stack_health, not an error."),
+     "inputSchema": {"type": "object", "additionalProperties": False, "required": ["code"], "properties": {"code": {
+         "type": "string", "minLength": 3, "maxLength": 100, "pattern": "^[a-z0-9_]+(\\.[a-z0-9_]+)+$",
+         "examples": ["ollama.unreachable", "model.expiring", "tailnet.relayed"],
+         "description": (
+             "Required. A finding code exactly as it appears in the \"code\" field of a stack_health finding, for "
+             "example \"ollama.unreachable\", \"model.expiring\" or \"tailnet.relayed\". Lowercase, dot-separated, "
+             "case-sensitive; no default. Shipped codes: " + ", ".join(sorted(EXPLAIN)) + ".")}}},
+     "annotations": _annotations("Explain a finding code", False)},
+]
+
 
 
 def explain(code):

@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+- **MCP tool definitions:** every tool description now says when to use it, when to use each sibling instead, its
+  behaviour (read-only, network or not, the 10 s snapshot reuse) and the JSON it returns. Every parameter declares
+  `Optional.`/`Required.`, a default where optional, `maxLength`, `examples`, and for `code` a `pattern`; both input
+  schemas set `additionalProperties: false`. This server does not validate arguments against the schemas, so nothing
+  it accepted before is rejected; a client that validates on its side may now refuse a malformed `code` earlier.
+- **`explain` covers `check.crashed`**, the WARN a crashing rule produces, which `stack_health` could report but
+  `explain` answered as "unknown code".
+- **Tests:** `tests/test_tool_definitions.py` fails if a tool or parameter loses its description, type, example,
+  default or constraints, if a shipped finding code has no `explain` entry, or if the README tool reference is stale.
+- **README** reorganised: 60-second quick start, architecture diagram and design decisions, client configs for Claude
+  Desktop, Claude Code and any stdio client, a tool reference generated from the live schemas
+  (`scripts/tool_reference.py`), limits, how it is tested, credits.
+- **Docs:** six architecture decision records in `docs/adr/`.
+- **Dockerfile** (stdio MCP server as a non-root user, example nodes file baked in) and a CI job that builds it and
+  lists its tools.
+
 ## stack-guardian 0.2.1 (2026-10-14)
 
 - **Fix:** the MCP Registry name is `io.github.LuminariSoftwares/stack-guardian` (the registry matches the GitHub owner's case); 0.2.0 carried the lower-case name and could not be published there.
