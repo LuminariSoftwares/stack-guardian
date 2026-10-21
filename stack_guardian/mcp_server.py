@@ -1,7 +1,7 @@
 """Read-only MCP stdio server for the stack_guardian package.
 
 Speaks JSON-RPC 2.0, one JSON object per line on stdin/stdout, and exposes three
-read-only tools: stack_health, stack_snapshot and explain. Everything above
+read-only tools: stack_health, stack_snapshot and stack_explain. Everything above
 default_tools() is pure and package-free; default_tools() is the only place that
 imports the rest of stack_guardian.
 """
@@ -68,38 +68,43 @@ def _annotations(title, open_world):
 TOOL_SPECS = [
     {"name": "stack_health", "title": "Stack health",
      "description": (
-         "Grade the health of a home AI stack: runs the health rules over every node's Ollama endpoints, loaded "
-         "models, NVIDIA GPUs and tailnet peers. "
-         "When to use: call this first to answer \"is my stack healthy?\" or \"why is my model slow or missing?\". "
-         "Use stack_snapshot instead when you need the raw data behind a finding, and explain to learn what one "
-         "finding code means and how to settle it. "
-         "Behaviour: read-only and needs no credentials. It probes the nodes over the network (HTTP to Ollama, "
-         "nvidia-smi and tailscale on the host), reuses one snapshot for 10 seconds, and grades against the saved run "
-         "history without writing to it, so calling it repeatedly changes nothing. "
-         "Returns JSON: {node, status: \"ok\"|\"warn\"|\"fail\", counts: {FAIL, WARN, INFO, OK}, findings: [{code, "
-         "level, severity, node, summary, evidence, try, confidence: \"VERIFIED\"|\"LIKELY\"|\"INSUFFICIENT\", "
-         "fix}]}; a healthy stack returns status \"ok\" and no WARN or FAIL findings."),
+         "Probe the AI stack's nodes now and grade what is wrong: runs the health rules over each node's Ollama "
+         "endpoints, loaded models, NVIDIA GPUs and tailnet peers. "
+         "When to use: first, to answer \"is my stack healthy?\" or \"why is my model missing?\". Use "
+         "stack_snapshot instead for the raw measurements behind a finding, and stack_explain for the general meaning "
+         "of a code; only stack_health says what is wrong right now. "
+         "Parameters: node (optional) limits the findings to one node; omit it for all. "
+         "Behaviour: read-only, no credentials. A call probes every node over the network (HTTP to Ollama, "
+         "nvidia-smi and tailscale on this host) and takes at most about 10 s; the snapshot is reused for 10 s, and "
+         "grading reads the saved run history without writing it. "
+         "Returns JSON: {node, status: ok|warn|fail, counts: {FAIL, WARN, INFO, OK}, findings: [{code, level, "
+         "node, summary, evidence, try, confidence: VERIFIED|LIKELY|INSUFFICIENT, fix}]}, one finding per affected "
+         "node; a healthy stack has status ok and no WARN or FAIL findings."),
      "inputSchema": _NODE, "annotations": _annotations("Stack health", True)},
     {"name": "stack_snapshot", "title": "Stack snapshot",
      "description": (
-         "Return the raw snapshot the health rules read: per node, its Ollama endpoints and loaded models, NVIDIA "
-         "GPUs with VRAM use and processes, and tailnet peer state. "
-         "When to use: as evidence when a stack_health finding needs checking, or to answer a factual question "
-         "(\"which models are loaded on gpu-box?\", \"how much VRAM is free?\"). Use stack_health instead for graded "
-         "verdicts and what to try, and explain for the meaning of one finding code. "
-         "Behaviour: read-only and needs no credentials. It probes the nodes over the network and reuses one snapshot "
-         "for 10 seconds, so repeated calls within that window return identical data; it writes nothing. "
-         "Returns JSON: {taken_at, nodes: {<name>: {reachable, ollama: [...], gpus: [...], tailnet: {...}}}}; with "
-         "an unknown node it returns {error} naming the known nodes."),
+         "Return the raw measurements the health rules read, ungraded: per node, its Ollama endpoints and loaded "
+         "models, NVIDIA GPUs with VRAM use and processes, and tailnet peer state. "
+         "When to use: to check the evidence behind a stack_health finding, or to answer a factual question "
+         "(\"which models are loaded on gpu-box?\", \"how much VRAM is free?\"). Use stack_health instead for a "
+         "verdict and what to try, and stack_explain for what a finding code means. "
+         "Parameters: node (optional) returns just that node; pass it to keep the reply small. "
+         "Behaviour: read-only, no credentials. It probes every node over the network, takes at most about 10 s, and "
+         "reuses one snapshot for 10 s, so repeated calls in that window return identical data; it writes nothing. "
+         "Returns JSON: {taken_at, nodes: {<name>: {reachable, latency_ms, ollama: [...], gpus: [...], tailnet: "
+         "{...}}}}; an unknown node returns {error} listing the known nodes."),
      "inputSchema": _NODE, "annotations": _annotations("Stack snapshot", True)},
-    {"name": "explain", "title": "Explain a finding code",
+    {"name": "stack_explain", "title": "Explain a finding code",
      "description": (
-         "Explain one finding code: what it means, what to try, and what evidence would settle it. "
-         "When to use: after stack_health reports a code you want to act on or explain to the user. Use stack_health "
-         "to get the current findings and stack_snapshot for the raw data; explain never looks at the stack itself. "
-         "Behaviour: a local table lookup with no network, no node access and no side effects. "
-         "Returns JSON: {summary, try: [string], evidence_needed: [string]}. A code it does not know (for example "
-         "one from a custom rule) returns a summary saying so and a hint to run stack_health, not an error."),
+         "Look up the reference entry for one finding code: what it means in general, what to try, and what evidence "
+         "would settle it. "
+         "When to use: after stack_health reports a code you want to act on or explain to the user. It never looks "
+         "at the stack. Use stack_health for what is wrong now and stack_snapshot for the current measurements. "
+         "Parameters: code (required), copied exactly from a finding's code field, for example "
+         "\"ollama.unreachable\". "
+         "Behaviour: a local table lookup; no network, no node access, no side effects. "
+         "Returns JSON: {summary, try: [string], evidence_needed: [string]}. An unknown code (for example one from a "
+         "custom rule) returns a summary saying so and a hint to run stack_health, not an error."),
      "inputSchema": {"type": "object", "additionalProperties": False, "required": ["code"], "properties": {"code": {
          "type": "string", "minLength": 3, "maxLength": 100, "pattern": "^[a-z0-9_]+(\\.[a-z0-9_]+)+$",
          "examples": ["ollama.unreachable", "model.expiring", "tailnet.relayed"],
@@ -109,6 +114,9 @@ TOOL_SPECS = [
              "case-sensitive; no default. Shipped codes: " + ", ".join(sorted(EXPLAIN)) + ".")}}},
      "annotations": _annotations("Explain a finding code", False)},
 ]
+# Names a client may still call but tools/list no longer advertises. explain became stack_explain after 0.2.1 so the
+# three tools share one prefix; the old name keeps working for configs and prompts written against 0.2.x.
+DEPRECATED_ALIASES = {"explain": "stack_explain"}
 
 
 
@@ -162,7 +170,8 @@ def handle(msg, tools):
             return {"jsonrpc": "2.0", "id": rid,
                     "error": {"code": -32602, "message": "invalid params: params and arguments must be objects"}}
         name = params.get("name")
-        if name not in tools:
+        name = DEPRECATED_ALIASES.get(name, name) if isinstance(name, str) else name
+        if not isinstance(name, str) or name not in tools:
             result = _text_result("unknown tool: %s" % name, True)
         else:
             try:
@@ -211,7 +220,7 @@ def health_body(findings, node):
 
 
 def make_tools(health_fn, snapshot_fn):
-    """Bind the pure protocol code to two data callables plus explain."""
+    """Bind the pure protocol code to two data callables plus stack_explain."""
     def stack_health(a):
         node = a.get("node") or ""
         return health_body(filter_node(health_fn(), node), node)
@@ -229,7 +238,7 @@ def make_tools(health_fn, snapshot_fn):
     def explain_tool(a):
         return explain(str(a.get("code") or ""))
 
-    return {"stack_health": stack_health, "stack_snapshot": stack_snapshot, "explain": explain_tool}
+    return {"stack_health": stack_health, "stack_snapshot": stack_snapshot, "stack_explain": explain_tool}
 
 
 def default_tools(nodes_path, ctx_path=None, state_path=None, ttl_s=10.0, clock=time.monotonic):
@@ -313,7 +322,7 @@ def _selftest():
 
     def c_tools_list():
         r = handle(req(2, "tools/list"), tools)
-        return [t["name"] for t in r["result"]["tools"]] == ["stack_health", "stack_snapshot", "explain"]
+        return [t["name"] for t in r["result"]["tools"]] == ["stack_health", "stack_snapshot", "stack_explain"]
 
     def c_notification_silent():
         return handle({"jsonrpc": "2.0", "method": "notifications/initialized"}, tools) is None
@@ -372,8 +381,17 @@ def _selftest():
                 and mixed["status"] == "fail" and mixed["counts"]["FAIL"] == 1 and mixed["counts"]["WARN"] == 1
                 and warn_only["status"] == "warn" and warn_only["counts"]["INFO"] == 1 and warn_only["node"] == "gpu-box-2")
 
+    def c_deprecated_alias_still_works():
+        old = json.loads(text_of(handle(req(11, "tools/call", {"name": "explain", "arguments": {"code": "tailnet.relayed"}}), tools)))
+        listed = [t["name"] for t in handle(req(12, "tools/list"), tools)["result"]["tools"]]
+        return old == explain("tailnet.relayed") and "explain" not in listed
+
+    def c_non_string_tool_name_is_error_result():
+        r = handle(req(13, "tools/call", {"name": ["explain"], "arguments": {}}), tools)
+        return r["result"]["isError"] is True
+
     def c_read_only_specs():
-        return all(t["name"] in ("stack_health", "stack_snapshot", "explain") for t in TOOL_SPECS) and len(TOOL_SPECS) == 3
+        return all(t["name"] in ("stack_health", "stack_snapshot", "stack_explain") for t in TOOL_SPECS) and len(TOOL_SPECS) == 3
 
     checks = [("initialize", c_initialize), ("tools_list", c_tools_list), ("notification_silent", c_notification_silent),
               ("unknown_method", c_unknown_method), ("invalid_request", c_invalid_request), ("health_all", c_health_all),
@@ -381,7 +399,10 @@ def _selftest():
               ("explain_known_and_unknown", c_explain_known_and_unknown), ("explain_returns_copies", c_explain_returns_copies),
               ("unknown_tool_is_error_result", c_unknown_tool_is_error_result),
               ("tool_exception_is_error_result", c_tool_exception_is_error_result), ("serve_lines", c_serve_lines),
-              ("health_body_counts_and_status", c_health_body_counts_and_status), ("read_only_specs", c_read_only_specs)]
+              ("health_body_counts_and_status", c_health_body_counts_and_status),
+              ("deprecated_alias_still_works", c_deprecated_alias_still_works),
+              ("non_string_tool_name_is_error_result", c_non_string_tool_name_is_error_result),
+              ("read_only_specs", c_read_only_specs)]
     passed = failed = 0
     for name, fn in checks:
         try:

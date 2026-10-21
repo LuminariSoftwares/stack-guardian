@@ -93,7 +93,7 @@ Each is written up with its alternatives in [docs/adr/](docs/adr/).
 ## For coding agents
 
 - **MCP server** (any MCP client): `stack-guardian-mcp` speaks MCP over stdio with three read-only tools,
-  `stack_health`, `stack_snapshot` and `explain`. See [MCP server](#mcp-server) for client configs and the tool
+  `stack_health`, `stack_snapshot` and `stack_explain`. See [MCP server](#mcp-server) for client configs and the tool
   reference.
 - **DSH plugin** (`npm install dsh-stack-guardian`, source in `dsh/`, Node 20+): adds one line at the start of a
   DeepSeek Harness session when the doctor reports WARN or FAIL, and nothing otherwise. It runs
@@ -151,6 +151,8 @@ addresses in the nodes file and expect `gpu.unavailable`/`tailnet.unavailable` f
 
 ### Tool reference
 
+`stack_explain` was called `explain` up to 0.2.1; calls to the old name still work, but only the new name is listed.
+
 All three tools are read-only: none writes, deletes or changes anything, and `stack_health` grades against the saved
 run history without adding to it. Generated from the live schemas by `python scripts/tool_reference.py --write`; a test
 fails if this section and the code disagree.
@@ -159,7 +161,7 @@ fails if this section and the code disagree.
 
 #### `stack_health` - Stack health
 
-Grade the health of a home AI stack: runs the health rules over every node's Ollama endpoints, loaded models, NVIDIA GPUs and tailnet peers. When to use: call this first to answer "is my stack healthy?" or "why is my model slow or missing?". Use stack_snapshot instead when you need the raw data behind a finding, and explain to learn what one finding code means and how to settle it. Behaviour: read-only and needs no credentials. It probes the nodes over the network (HTTP to Ollama, nvidia-smi and tailscale on the host), reuses one snapshot for 10 seconds, and grades against the saved run history without writing to it, so calling it repeatedly changes nothing. Returns JSON: {node, status: "ok"|"warn"|"fail", counts: {FAIL, WARN, INFO, OK}, findings: [{code, level, severity, node, summary, evidence, try, confidence: "VERIFIED"|"LIKELY"|"INSUFFICIENT", fix}]}; a healthy stack returns status "ok" and no WARN or FAIL findings.
+Probe the AI stack's nodes now and grade what is wrong: runs the health rules over each node's Ollama endpoints, loaded models, NVIDIA GPUs and tailnet peers. When to use: first, to answer "is my stack healthy?" or "why is my model missing?". Use stack_snapshot instead for the raw measurements behind a finding, and stack_explain for the general meaning of a code; only stack_health says what is wrong right now. Parameters: node (optional) limits the findings to one node; omit it for all. Behaviour: read-only, no credentials. A call probes every node over the network (HTTP to Ollama, nvidia-smi and tailscale on this host) and takes at most about 10 s; the snapshot is reused for 10 s, and grading reads the saved run history without writing it. Returns JSON: {node, status: ok|warn|fail, counts: {FAIL, WARN, INFO, OK}, findings: [{code, level, node, summary, evidence, try, confidence: VERIFIED|LIKELY|INSUFFICIENT, fix}]}, one finding per affected node; a healthy stack has status ok and no WARN or FAIL findings.
 
 Annotations: `readOnlyHint: true`, `destructiveHint: false`, `idempotentHint: true`, `openWorldHint: true`
 
@@ -169,7 +171,7 @@ Annotations: `readOnlyHint: true`, `destructiveHint: false`, `idempotentHint: tr
 
 #### `stack_snapshot` - Stack snapshot
 
-Return the raw snapshot the health rules read: per node, its Ollama endpoints and loaded models, NVIDIA GPUs with VRAM use and processes, and tailnet peer state. When to use: as evidence when a stack_health finding needs checking, or to answer a factual question ("which models are loaded on gpu-box?", "how much VRAM is free?"). Use stack_health instead for graded verdicts and what to try, and explain for the meaning of one finding code. Behaviour: read-only and needs no credentials. It probes the nodes over the network and reuses one snapshot for 10 seconds, so repeated calls within that window return identical data; it writes nothing. Returns JSON: {taken_at, nodes: {<name>: {reachable, ollama: [...], gpus: [...], tailnet: {...}}}}; with an unknown node it returns {error} naming the known nodes.
+Return the raw measurements the health rules read, ungraded: per node, its Ollama endpoints and loaded models, NVIDIA GPUs with VRAM use and processes, and tailnet peer state. When to use: to check the evidence behind a stack_health finding, or to answer a factual question ("which models are loaded on gpu-box?", "how much VRAM is free?"). Use stack_health instead for a verdict and what to try, and stack_explain for what a finding code means. Parameters: node (optional) returns just that node; pass it to keep the reply small. Behaviour: read-only, no credentials. It probes every node over the network, takes at most about 10 s, and reuses one snapshot for 10 s, so repeated calls in that window return identical data; it writes nothing. Returns JSON: {taken_at, nodes: {<name>: {reachable, latency_ms, ollama: [...], gpus: [...], tailnet: {...}}}}; an unknown node returns {error} listing the known nodes.
 
 Annotations: `readOnlyHint: true`, `destructiveHint: false`, `idempotentHint: true`, `openWorldHint: true`
 
@@ -177,9 +179,9 @@ Annotations: `readOnlyHint: true`, `destructiveHint: false`, `idempotentHint: tr
 |---|---|---|---|---|---|
 | `node` | string | no | `""` | maxLength `200` | `gpu-box` |
 
-#### `explain` - Explain a finding code
+#### `stack_explain` - Explain a finding code
 
-Explain one finding code: what it means, what to try, and what evidence would settle it. When to use: after stack_health reports a code you want to act on or explain to the user. Use stack_health to get the current findings and stack_snapshot for the raw data; explain never looks at the stack itself. Behaviour: a local table lookup with no network, no node access and no side effects. Returns JSON: {summary, try: [string], evidence_needed: [string]}. A code it does not know (for example one from a custom rule) returns a summary saying so and a hint to run stack_health, not an error.
+Look up the reference entry for one finding code: what it means in general, what to try, and what evidence would settle it. When to use: after stack_health reports a code you want to act on or explain to the user. It never looks at the stack. Use stack_health for what is wrong now and stack_snapshot for the current measurements. Parameters: code (required), copied exactly from a finding's code field, for example "ollama.unreachable". Behaviour: a local table lookup; no network, no node access, no side effects. Returns JSON: {summary, try: [string], evidence_needed: [string]}. An unknown code (for example one from a custom rule) returns a summary saying so and a hint to run stack_health, not an error.
 
 Annotations: `readOnlyHint: true`, `destructiveHint: false`, `idempotentHint: true`, `openWorldHint: false`
 
@@ -333,7 +335,7 @@ python -m pytest -q
 - Integration tests drive the real CLI and the MCP server over stdio in a subprocess, including the tool list and its
   annotations, and run the `examples/` exactly as this README shows them.
 - `tests/test_tool_definitions.py` fails if any MCP tool or parameter loses its description, type, example, default or
-  constraints, if a shipped finding code has no `explain` entry, or if the tool reference above is stale.
+  constraints, if a shipped finding code has no `stack_explain` entry, or if the tool reference above is stale.
 - CI runs the suite on Ubuntu, Windows and macOS (Python 3.11), builds the wheel and runs it from a clean virtualenv
   (so a release without its rules fails), builds the Docker image and lists its tools, syntax-checks the DSH plugin,
   and runs a privacy scan of every tracked file.

@@ -24,15 +24,17 @@ def _tool_reference():
 
 @pytest.mark.parametrize("tool", TOOL_SPECS, ids=NAMES)
 def test_tool_has_every_documented_part(tool):
-    assert re.fullmatch(r"[a-z]+(_[a-z]+)*", tool["name"]), "tool names are lower snake_case"
+    assert re.fullmatch(r"stack_[a-z]+", tool["name"]), "tool names share the stack_ prefix (Glama: Naming Consistency)"
     assert tool["title"].strip() and tool["annotations"]["title"] == tool["title"]
     desc = tool["description"]
-    for part in ("When to use:", "Behaviour:", "Returns JSON:"):
+    for part in ("When to use:", "Parameters:", "Behaviour:", "Returns JSON:"):
         assert part in desc, (tool["name"], part)
     assert "read-only" in desc or "no side effects" in desc, tool["name"]
     for other in NAMES:
         if other != tool["name"]:
             assert other in desc, (tool["name"], "should say when to use", other)
+    for pname in tool["inputSchema"]["properties"]:
+        assert "Parameters: %s (" % pname in desc, (tool["name"], "the description names its parameter", pname)
     assert len(desc) <= 1200, "keep descriptions concise: %d chars" % len(desc)
     schema = tool["inputSchema"]
     assert schema["type"] == "object" and schema.get("additionalProperties") is False
@@ -63,7 +65,7 @@ def test_every_shipped_finding_code_can_be_explained():
     shipped = set(re.findall(r'"([a-z_]+\.[a-z_]+)"', rules)) | {"check.crashed"}
     assert shipped, "no codes found in the shipped rules"
     assert shipped <= set(EXPLAIN), sorted(shipped - set(EXPLAIN))
-    pattern = TOOL_SPECS[NAMES.index("explain")]["inputSchema"]["properties"]["code"]["pattern"]
+    pattern = TOOL_SPECS[NAMES.index("stack_explain")]["inputSchema"]["properties"]["code"]["pattern"]
     assert all(re.fullmatch(pattern, code) for code in EXPLAIN)
 
 
@@ -73,3 +75,13 @@ def test_readme_tool_reference_is_generated_from_the_schemas():
     assert ref.splice(readme, ref.render()) == readme, "run: python scripts/tool_reference.py --write"
     for name in NAMES:
         assert "#### `%s`" % name in readme
+
+
+def test_renamed_tool_keeps_its_old_name_as_a_hidden_alias():
+    from stack_guardian.mcp_server import DEPRECATED_ALIASES, handle, make_tools
+    tools = make_tools(lambda: [], lambda: {})
+    for old, new in DEPRECATED_ALIASES.items():
+        assert new in NAMES and old not in NAMES
+        reply = handle({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                        "params": {"name": old, "arguments": {"code": "tailnet.relayed"}}}, tools)
+        assert reply["result"]["isError"] is False, old

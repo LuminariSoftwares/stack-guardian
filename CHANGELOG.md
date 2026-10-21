@@ -2,15 +2,20 @@
 
 ## Unreleased
 
+- **Renamed MCP tool `explain` to `stack_explain`** so all three tools share the `stack_` prefix (Glama scored Naming
+  Consistency 3/5 for the mix). `tools/list` advertises only the new name; a `tools/call` for `explain` still works
+  as a deprecated alias.
+- **Fix:** a `tools/call` whose `name` was not a string (for example a list) raised `TypeError` and ended the stdio
+  server; it now returns a tool error result.
 - **MCP tool definitions:** every tool description now says when to use it, when to use each sibling instead, its
   behaviour (read-only, network or not, the 10 s snapshot reuse) and the JSON it returns. Every parameter declares
   `Optional.`/`Required.`, a default where optional, `maxLength`, `examples`, and for `code` a `pattern`; both input
   schemas set `additionalProperties: false`. This server does not validate arguments against the schemas, so nothing
   it accepted before is rejected; a client that validates on its side may now refuse a malformed `code` earlier.
-- **`explain` covers `check.crashed`**, the WARN a crashing rule produces, which `stack_health` could report but
-  `explain` answered as "unknown code".
+- **`stack_explain` covers `check.crashed`**, the WARN a crashing rule produces, which `stack_health` could report
+  but `explain` answered as "unknown code".
 - **Tests:** `tests/test_tool_definitions.py` fails if a tool or parameter loses its description, type, example,
-  default or constraints, if a shipped finding code has no `explain` entry, or if the README tool reference is stale.
+  default or constraints, if a shipped finding code has no `stack_explain` entry, or if the README tool reference is stale.
 - **README** reorganised: 60-second quick start, architecture diagram and design decisions, client configs for Claude
   Desktop, Claude Code and any stdio client, a tool reference generated from the live schemas
   (`scripts/tool_reference.py`), limits, how it is tested, credits.

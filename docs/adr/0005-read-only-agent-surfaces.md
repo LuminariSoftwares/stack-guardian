@@ -12,9 +12,9 @@ a `VERIFIED` finding (ADR 0003).
 
 ## Decision
 
-- The MCP server exposes only `stack_health`, `stack_snapshot` and `explain`, all annotated `readOnlyHint: true`,
-  `destructiveHint: false`, `idempotentHint: true`; only `explain` is `openWorldHint: false`, because it is a local
-  table lookup. There is no fix tool.
+- The MCP server exposes only `stack_health`, `stack_snapshot` and `stack_explain` (named `explain` up to 0.2.1, and
+  still accepted under that name), all annotated `readOnlyHint: true`, `destructiveHint: false`, `idempotentHint:
+  true`; only `stack_explain` is `openWorldHint: false`, because it is a local table lookup. There is no fix tool.
 - `stack_health` calls the doctor with `record=False`: it grades against the saved history without adding to it.
 - One snapshot is reused for `--ttl` seconds (default 10), so a burst of calls probes the nodes once.
 - `stack-guardian-serve` answers `GET /snapshot`, `/metrics` and `/health`, refuses every write verb, and refuses to

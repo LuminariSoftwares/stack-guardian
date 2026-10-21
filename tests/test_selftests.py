@@ -80,7 +80,7 @@ def test_mcp_stdio_end_to_end(tmp_path):
                        input="\n".join(json.dumps(m) for m in msgs) + "\n", capture_output=True, text=True, timeout=120)
     out = {o["id"]: o for o in (json.loads(x) for x in r.stdout.splitlines() if x.strip())}
     assert sorted(out) == [1, 2, 3], r.stdout + r.stderr
-    assert [t["name"] for t in out[2]["result"]["tools"]] == ["stack_health", "stack_snapshot", "explain"]
+    assert [t["name"] for t in out[2]["result"]["tools"]] == ["stack_health", "stack_snapshot", "stack_explain"]
     body = json.loads(out[3]["result"]["content"][0]["text"])
     assert any(f["code"] == "ollama.unreachable" and f["node"] == "lab" for f in body["findings"]), body
 
