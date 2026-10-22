@@ -21,7 +21,8 @@ def node_unreachable(snapshot, ctx):
     return [F.make_finding("node.unreachable", "missing", "FAIL", name,
                            "node did not answer the collector: %s" % node["error"],
                            evidence=["%s: %s" % (name, node["error"])],
-                           try_=["check the machine is on and reachable", "raise timeout_s if the node is just slow"])
+                           try_=["check the machine is on and reachable",
+                                 "give it longer with --timeout SECONDS (or \"_options\": {\"timeout_s\": N} in the nodes file)"])
             for name, node in _nodes(snapshot) if node.get("error")]
 
 
@@ -122,9 +123,26 @@ def vram_unattributed(snapshot, ctx):
 
 
 def gpu_unavailable(snapshot, ctx):
-    return [F.make_finding("gpu.unavailable", "partial", "INFO", name, "GPU status unavailable",
-                           evidence=["%s: %s" % (name, node["gpu_error"])], try_=["check nvidia-smi runs on that node"])
+    """INFO, with the reason in the summary: a missing nvidia-smi and a failing one need different fixes."""
+    return [F.make_finding("gpu.unavailable", "partial", "INFO", name,
+                           "GPU status unavailable: %s" % node["gpu_error"],
+                           evidence=["%s: %s" % (name, node["gpu_error"])], try_=["run nvidia-smi on that node"])
             for name, node in _nodes(snapshot) if node.get("gpu_error")]
+
+
+def gpu_parse_degraded(snapshot, ctx):
+    """INFO when nvidia-smi printed a GPU line this parser could not read, so that card is missing from the report."""
+    out = []
+    for name, node in _nodes(snapshot):
+        unreadable = node.get("gpu_unreadable") or []
+        if unreadable:
+            out.append(F.make_finding("gpu.parse_degraded", "partial", "INFO", name,
+                                      "%d nvidia-smi GPU line(s) unreadable, so those GPUs are missing from this report"
+                                      % len(unreadable),
+                                      evidence=["%s: %s" % (name, line) for line in unreadable],
+                                      try_=["run the nvidia-smi query by hand and look at the [N/A] fields",
+                                            "update the NVIDIA driver, which reports [N/A] for some vGPU and WDDM setups"]))
+    return out
 
 
 def _tailnet(node):
@@ -132,9 +150,10 @@ def _tailnet(node):
 
 
 def tailnet_unavailable(snapshot, ctx):
-    return [F.make_finding("tailnet.unavailable", "partial", "INFO", name, "tailnet status unavailable",
+    return [F.make_finding("tailnet.unavailable", "partial", "INFO", name,
+                           "tailnet status unavailable: %s" % (_tailnet(node).get("error") or "tailscale gave no status"),
                            evidence=["%s: %s" % (name, _tailnet(node).get("error") or "tailscale gave no status")],
-                           try_=["check tailscale is installed and tailscaled is running"])
+                           try_=["run tailscale status on that node", "start tailscaled, or log this node in"])
             for name, node in _nodes(snapshot) if _tailnet(node) is not None and _tailnet(node).get("peer") is None]
 
 
@@ -161,6 +180,7 @@ CHECKS = [
     ("model.slow_ttft", model_slow_ttft),
     ("vram.unattributed", vram_unattributed),
     ("gpu.unavailable", gpu_unavailable),
+    ("gpu.parse_degraded", gpu_parse_degraded),
     ("tailnet.unavailable", tailnet_unavailable),
     ("tailnet.peer_offline", tailnet_peer_offline),
     ("tailnet.relayed", tailnet_relayed),
@@ -208,6 +228,15 @@ def _selftest():
         [g] = model_expiring({"nodes": {"gpu-box": {"ollama": [dict(ep, ps_error="HTTP 404 on /api/ps")]}}}, {})
         return f["level"] == "WARN" and "45s" in f["evidence"][0] and g["level"] == "INFO"
 
+    def t_unavailable_summaries_say_why():
+        [g] = gpu_unavailable({"nodes": {"gpu-box": {"gpu_error": "nvidia-smi is not on PATH (NVIDIA GPUs only)"}}}, {})
+        [t] = tailnet_unavailable({"nodes": {"gpu-box": {"tailnet": {"peer": None, "error": "tailscale is not on PATH"}}}}, {})
+        return "not on PATH" in g["summary"] and "not on PATH" in t["summary"]
+
+    def t_unreadable_gpu_line_is_info():
+        [f] = gpu_parse_degraded({"nodes": {"gpu-box": {"gpu_unreadable": ["nvidia-smi line 2 ...: 1, GPU-b, RTX, [N/A], [N/A]"]}}}, {})
+        return f["code"] == "gpu.parse_degraded" and f["level"] == "INFO" and "GPU-b" in f["evidence"][0]
+
     def t_empty_snapshot():
         return all(fn({}, {}) == [] for _, fn in CHECKS) and all(fn(None, None) == [] for _, fn in CHECKS)
 
@@ -219,6 +248,8 @@ def _selftest():
         ("vram_threshold", t_vram_threshold),
         ("tailnet_offline_and_relayed", t_tailnet_offline_and_relayed),
         ("model_expiring", t_model_expiring),
+        ("unavailable_summaries_say_why", t_unavailable_summaries_say_why),
+        ("unreadable_gpu_line_is_info", t_unreadable_gpu_line_is_info),
         ("empty_snapshot", t_empty_snapshot),
     ]
     passed = 0

@@ -7,6 +7,7 @@ tests never touch the network or the GPU.  A dead endpoint is data, never a cras
 """
 
 import json
+import shutil
 import subprocess
 import sys
 import time
@@ -155,6 +156,12 @@ def collect_openai(url, http_get=None, clock=None):
     return out
 
 
+def _why_missing(program, absent, failed, which=None):
+    """Why a helper program gave nothing: it is not installed, or it ran and failed. The two need different fixes."""
+    which = which or shutil.which
+    return absent if which(program) is None else failed
+
+
 def collect_gpus(run=None):
     """Describe the local GPUs and their attributed compute processes."""
     return collect_gpus_status(run)[0]
@@ -162,21 +169,34 @@ def collect_gpus(run=None):
 
 def collect_gpus_status(run=None):
     """(gpus, error): error is set when nvidia-smi is missing or fails, so "no GPUs" and "cannot tell" differ."""
+    return _collect_gpus(run)[:2]
+
+
+def _collect_gpus(run=None, which=None):
+    """(gpus, error, unreadable): unreadable holds one note per nvidia-smi line the parser could not read."""
     run = run or default_run
     gpu = run(GPU_QUERY)
     if gpu is None:
-        return [], "nvidia-smi unavailable (not installed, or it failed)"
+        return [], _why_missing("nvidia-smi",
+                                "nvidia-smi is not on PATH (NVIDIA GPUs only: this is how stack-guardian reads them)",
+                                "nvidia-smi is on PATH but failed (driver trouble, or no NVIDIA GPU here)",
+                                which=which), []
     if not gpu.strip():
-        return [], None
-    return sg_parsers.parse_nvsmi(gpu, run(APPS_QUERY) or ""), None
+        return [], None, []
+    gpus, unreadable = sg_parsers.parse_nvsmi_lines(gpu, run(APPS_QUERY) or "")
+    return gpus, None, unreadable
 
 
-def collect_tailnet(peer_host, run=None):
+def collect_tailnet(peer_host, run=None, which=None):
     """Report whether peer_host is visible on the tailnet and how it is reached; peer None when tailscale cannot say."""
     run = run or default_run
     out = run(TAILSCALE_STATUS)
     if out is None:
-        return dict(sg_parsers.UNAVAILABLE, error="tailscale status failed (tailscale missing or tailscaled down)")
+        return dict(sg_parsers.UNAVAILABLE,
+                    error=_why_missing("tailscale",
+                                       "tailscale is not on PATH (this machine is not on a tailnet)",
+                                       "tailscale status failed (tailscaled is not running, or this node is logged out)",
+                                       which=which))
     return sg_parsers.parse_tailscale(out, peer_host)
 
 
@@ -198,9 +218,11 @@ def snapshot(nodes, run=None, http_get=None, now=None, clock=None, timeout_s=10.
         ok = [o for o in ollama if o["error"] is None]
         node = {"reachable": bool(ok), "latency_ms": ok[0]["latency_ms"] if ok else None, "ollama": ollama}
         if cfg.get("local"):
-            node["gpus"], gpu_error = collect_gpus_status(run=run)
+            node["gpus"], gpu_error, unreadable = _collect_gpus(run=run)
             if gpu_error:
                 node["gpu_error"] = gpu_error
+            if unreadable:
+                node["gpu_unreadable"] = unreadable
         if cfg.get("tailnet_host"):
             node["tailnet"] = collect_tailnet(cfg["tailnet_host"], run=run)
         return node
@@ -258,7 +280,19 @@ def _selftest():
         return len(g) == 2 and g[0]["attributed_mib"] == 8800 and g[0]["processes"][0]["name"] == "ollama.exe"
 
     def t_no_nvidia_smi():
-        return collect_gpus(run=run_none) == []
+        gpus, error = collect_gpus_status(run=run_none)
+        absent = _why_missing("nvidia-smi", "absent", "failed", which=lambda _p: None)
+        present = _why_missing("nvidia-smi", "absent", "failed", which=lambda _p: "/usr/bin/nvidia-smi")
+        return gpus == [] and "nvidia-smi" in error and (absent, present) == ("absent", "failed")
+
+    def t_unreadable_gpu_line_is_kept():
+        def run_na(argv, timeout=15):
+            if "--query-gpu=index,uuid,name,memory.total,memory.used" in argv:
+                return "0, GPU-a, RTX 3060, 12288, 9000\n1, GPU-b, RTX 4070, [N/A], [N/A]\n"
+            return ""
+        snap = snapshot({"gpu-box": {"local": True}}, run=run_na, now="T")
+        node = snap["nodes"]["gpu-box"]
+        return len(node["gpus"]) == 1 and len(node.get("gpu_unreadable") or []) == 1
 
     def t_tailnet():
         t = collect_tailnet("GPU-BOX", run=run_ok)
@@ -284,6 +318,7 @@ def _selftest():
         ("openai_ok", t_openai_ok),
         ("gpus", t_gpus),
         ("no_nvidia_smi", t_no_nvidia_smi),
+        ("unreadable_gpu_line_is_kept", t_unreadable_gpu_line_is_kept),
         ("tailnet", t_tailnet),
         ("tailnet_missing", t_tailnet_missing),
         ("snapshot_shape", t_snapshot_shape),

@@ -98,7 +98,11 @@ def run_all(checks, snapshot, ctx=None, max_workers=8):
 
 
 def render(findings):
-    """Render findings one per line, worst level first, plus a verdict."""
+    """Render findings one per line, worst level first, each with its confidence grade, plus a verdict.
+
+    The grade is the point of the tool (one sample is at most LIKELY, the same finding twice is VERIFIED), so it
+    belongs on the human line and not only in --json. "worst: X" stays the last line.
+    """
     findings = list(findings)
     if not findings:
         return "worst: OK"
@@ -107,12 +111,20 @@ def render(findings):
     lines = []
     for finding in ordered:
         node = finding.get("node") or ""
-        lines.append("%-4s %s%s: %s" % (finding.get("level", "OK"),
-                                       finding.get("code", ""),
-                                       " [" + node + "]" if node else "",
-                                       finding.get("summary", "")))
+        confidence = finding.get("confidence")
+        lines.append("%-4s %s%s: %s%s" % (finding.get("level", "OK"),
+                                          finding.get("code", ""),
+                                          " [" + node + "]" if node else "",
+                                          finding.get("summary", ""),
+                                          " (%s)" % confidence if confidence else ""))
     lines.append("worst: " + sg_finding.worst(findings))
     return "\n".join(lines)
+
+
+def unconfirmed(findings):
+    """The WARN/FAIL findings that one run can only call LIKELY; a second run is what turns them into VERIFIED."""
+    return [f for f in findings or ()
+            if f.get("level") in ("WARN", "FAIL") and f.get("confidence") == "LIKELY"]
 
 
 @contextlib.contextmanager
@@ -191,6 +203,18 @@ def _check_render_sorted():
     return lines[0].startswith("FAIL")
 
 
+def _check_render_shows_confidence():
+    findings = [sg_finding.make_finding("bad_code", "missing", "FAIL", "web", "fail summary"),
+                sg_finding.make_finding("old_code", "partial", "WARN", "web", "warn summary",
+                                        confidence="VERIFIED")]
+    lines = render(findings).split("\n")
+    return (lines[0] == "FAIL bad_code [web]: fail summary (LIKELY)"
+            and lines[1] == "WARN old_code [web]: warn summary (VERIFIED)"
+            and lines[-1] == "worst: FAIL"
+            and [f["code"] for f in unconfirmed(findings)] == ["bad_code"]
+            and unconfirmed([sg_finding.make_finding("i", "n/a", "INFO", "", "s")]) == [])
+
+
 def _check_render_empty():
     return render([]) == "worst: OK"
 
@@ -207,6 +231,7 @@ _SELFTESTS = [
     ("none_dropped", _check_none_dropped),
     ("order_kept", _check_order_kept),
     ("render_sorted", _check_render_sorted),
+    ("render_shows_confidence", _check_render_shows_confidence),
     ("render_empty", _check_render_empty),
     ("missing_dir", _check_missing_dir),
 ]

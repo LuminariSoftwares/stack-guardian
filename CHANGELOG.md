@@ -2,6 +2,56 @@
 
 ## Unreleased
 
+Review fixes (external review, 2026-10-21). Everything below has a test that was red before the change.
+
+- **Breaking: the nodes file is validated when it is read.** Migration: fix the node the error names, or add
+  `"local": true` / `"tailnet_host": "NAME"` to a node that has no endpoints on purpose. Shapes that used to be
+  accepted and answered wrongly are now a usage error (exit `3`) naming the node: `"endpoints"` on a node that is
+  not marked `"kind": "openai"`, a node with nothing to probe, a URL without a scheme, an unknown `"kind"`, and a
+  top-level JSON list (which used to crash with `AttributeError` and exit `4`). A configuration that reported
+  `worst: OK` and exit `0` while checking nothing now fails loudly. `"ollama": "http://..."` - a single string
+  where a list belongs - is accepted as a one-element list with one note on stderr; it used to be iterated per
+  character ("18 Ollama endpoint(s) do not answer: h, t, t, p, ...").
+- **New: keys starting with `_` in a nodes file are ignored**, so a file can carry comments and candidate nodes,
+  and `"_options": {"timeout_s": N}` sets that file's collection deadline.
+- **The confidence grade is on the human `doctor` line**, not only in `--json`:
+  `FAIL ollama.unreachable [gpu-box]: ... (LIKELY)`, with `worst: X` still the last line of stdout and one stderr
+  hint when a WARN or FAIL is only `LIKELY`. `--json` is unchanged apart from a new `"schema": 1`.
+- **`stack-guardian --version`** prints the version and exits `0`; it used to be a usage error. `--help` now lists
+  `doctor`, `snapshot`, `init` and the `mcp` subcommand.
+- **New: `stack-guardian init`** writes a starter nodes file for this machine (probes the local Ollama, lists
+  tailnet peers as commented-out candidates, prints the next command). It never overwrites an existing file.
+- **Fix: the process ends with the report.** A node that answered one byte at a time kept the collector thread -
+  and the whole process - alive long after the 10 s deadline (measured: still running at 90 s). Collectors are
+  daemon threads now. The deadline is settable with `--timeout SECONDS` or `"_options": {"timeout_s": N}`, and the
+  `node.unreachable` advice names the flag that exists.
+- **Fix: `--fix ID` as a dry run prints what it would do** - the argv it would run, the request it would send, or
+  the variable it would set - instead of only a one-line description.
+- **`gpu.unavailable` and `tailnet.unavailable` say why**: `nvidia-smi`/`tailscale` is not on PATH, or it ran and
+  failed. The two need different fixes.
+- **New rule `gpu.parse_degraded` (INFO):** a GPU line `nvidia-smi` filled with `[N/A]` used to vanish from the
+  report, so a card the machine has went unmentioned. It is reported, with the line as evidence, and
+  `stack_explain` covers it.
+- **Fix: `stack-guardian-serve --host 0.0.0.0` without `--allow-remote`** printed a traceback; it prints one error
+  line and exits `3`.
+- **New: `stack-guardian-serve --cache SECONDS`** (default `0`, off) reuses one snapshot for a scrape interval
+  faster than your nodes answer. The documented default - a fresh snapshot per request - is unchanged.
+- **Private by default:** the state folder is created `0700`, and `env`, `fixes.jsonl` and `snapshots/*` `0600`.
+  `set_env` used to write its values with whatever umask was in force.
+- **MCP tool definitions cut from 1441 to 642 tokens** (budget 650, enforced by `tests/test_tools_list_budget.py`
+  against the real server). Same three tools, same arguments, same annotations; `stack_health` and
+  `stack_snapshot` now say that the text they return is data quoted from your nodes.
+- **MCP: a JSON line that is not a request** (a list, a string, an object with no method) answers `-32600` instead
+  of nothing, and the server keeps reading. An unknown method, `server/discover` included, still answers `-32601`.
+- **Docs:** `SECURITY.md` (private reporting, and what the tool does by design) and `CONTRIBUTING.md`. The README
+  gains the guardian family, a note that this is unrelated to the StackGuardian company, a Windows/pipx quick
+  start, a troubleshooting table by finding code, and a "what leaves the machine, and what is written" section.
+  The claim that you could "run `stack-guardian-serve` on each GPU box" to collect remote GPUs is gone: nothing in
+  the package reads a remote `/snapshot`; it is a Prometheus scrape target.
+- **Packaging:** a `test` extra (`pip install -e ".[test]"`), because `pip install -e . pytest` failed
+  `tests/test_spdx_license.py` for want of `build`. Classifier `Development Status :: 3 - Alpha`.
+- **CI:** Ubuntu also runs Python 3.12 and 3.13, and every third-party action is pinned to a commit SHA.
+
 - **Renamed MCP tool `explain` to `stack_explain`** so all three tools share the `stack_` prefix (Glama scored Naming
   Consistency 3/5 for the mix). `tools/list` advertises only the new name; a `tools/call` for `explain` still works
   as a deprecated alias.

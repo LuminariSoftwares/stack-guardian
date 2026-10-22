@@ -6,6 +6,7 @@ command / HTTP output text in and gets plain data structures back.
 Public API
 ----------
     parse_nvsmi(gpu_csv: str, apps_csv: str = "") -> list
+    parse_nvsmi_lines(gpu_csv: str, apps_csv: str = "") -> (list, list)
     parse_tailscale(status_json: str, peer_host: str) -> dict
     parse_ollama_ps(ps_json: str) -> list
 
@@ -23,7 +24,9 @@ import shutil
 import sys
 import tempfile
 
-__all__ = ["parse_nvsmi", "parse_tailscale", "parse_ollama_ps", "main"]
+__all__ = ["parse_nvsmi", "parse_nvsmi_lines", "parse_tailscale", "parse_ollama_ps", "main"]
+
+UNREADABLE_MAX = 160
 
 _UNKNOWN = {"peer": False, "direct": None, "derp": None, "ips": []}
 UNAVAILABLE = {"peer": None, "direct": None, "derp": None, "ips": []}
@@ -42,10 +45,14 @@ def _to_int(field: str):
         return None
 
 
-def _parse_gpu_lines(gpu_csv: str) -> list:
-    """One dict per parsable GPU line, in input order.  Never raises."""
-    gpus = []
-    for line in (gpu_csv or "").splitlines():
+def _parse_gpu_lines(gpu_csv: str):
+    """(gpus, unreadable): one dict per parsable GPU line, in input order, plus one note per line that was not.
+
+    nvidia-smi prints "[N/A]" for a field it cannot read (a vGPU, or an older driver on Windows). Such a line used
+    to vanish silently, so a GPU the machine has went unreported; it is now handed back as a note instead.
+    """
+    gpus, unreadable = [], []
+    for number, line in enumerate((gpu_csv or "").splitlines(), start=1):
         line = line.strip()
         if not line:
             continue
@@ -55,6 +62,8 @@ def _parse_gpu_lines(gpu_csv: str) -> list:
             total = int(total_mib)
             used = int(used_mib)
         except (AttributeError, ValueError):
+            unreadable.append("nvidia-smi line %d has a field this parser cannot read (such as \"[N/A]\"): %s"
+                              % (number, line[:UNREADABLE_MAX]))
             continue
         # attributed_mib / unattributed_mib are recomputed per-GPU in
         # parse_nvsmi once the compute-app lines are attached.
@@ -68,7 +77,7 @@ def _parse_gpu_lines(gpu_csv: str) -> list:
             "unattributed_mib": 0,
             "processes": [],
         })
-    return gpus
+    return gpus, unreadable
 
 
 def _parse_app_lines(apps_csv: str) -> list:
@@ -96,11 +105,16 @@ def _parse_app_lines(apps_csv: str) -> list:
 
 
 def parse_nvsmi(gpu_csv: str, apps_csv: str = "") -> list:
-    """Parse `nvidia-smi` GPU and compute-app CSV into snapshot GPU records.
+    """The GPU records of parse_nvsmi_lines; use that one to see the lines it could not read."""
+    return parse_nvsmi_lines(gpu_csv, apps_csv)[0]
 
-    Lines whose int fields do not parse are skipped; nothing here raises.
+
+def parse_nvsmi_lines(gpu_csv: str, apps_csv: str = ""):
+    """Parse `nvidia-smi` GPU and compute-app CSV into (snapshot GPU records, notes about unreadable lines).
+
+    Lines whose int fields do not parse become a note instead of a record; nothing here raises.
     """
-    gpus = _parse_gpu_lines(gpu_csv)
+    gpus, unreadable = _parse_gpu_lines(gpu_csv)
     apps = _parse_app_lines(apps_csv)
 
     for gpu in gpus:
@@ -123,7 +137,7 @@ def parse_nvsmi(gpu_csv: str, apps_csv: str = "") -> list:
         gpu["unattributed_mib"] = None if all_na else max(0, gpu["used_mib"] - attributed)
         gpu["processes"] = processes
 
-    return gpus
+    return gpus, unreadable
 
 
 def parse_tailscale(status_json: str, peer_host: str) -> dict:
@@ -415,6 +429,15 @@ def _check_nvsmi_never_raises() -> bool:
                              "processes": []}]
 
 
+def _check_nvsmi_unreadable_line_is_reported() -> bool:
+    """A GPU line nvidia-smi filled with "[N/A]" is handed back as a note instead of vanishing."""
+    gpus, unreadable = parse_nvsmi_lines("0, GPU-a, RTX 3060, 12288, 9000\n1, GPU-b, RTX 4070, [N/A], [N/A]\n")
+    ok = [g["uuid"] for g in gpus] == ["GPU-a"] and len(unreadable) == 1
+    ok = ok and "line 2" in unreadable[0] and "GPU-b" in unreadable[0]
+    ok = ok and parse_nvsmi_lines("")[1] == [] and parse_nvsmi("1, GPU-b, RTX 4070, [N/A], [N/A]") == []
+    return ok
+
+
 def _check_nvsmi_empty() -> bool:
     """Empty and whitespace-only input give an empty list, with an optional apps blob."""
     ok = parse_nvsmi("") == []
@@ -614,6 +637,7 @@ SELFTESTS = [
     ("nvsmi_attribution_exceeds_used", _check_nvsmi_attribution_exceeds_used),
     ("nvsmi_never_raises", _check_nvsmi_never_raises),
     ("nvsmi_empty", _check_nvsmi_empty),
+    ("nvsmi_unreadable_line_is_reported", _check_nvsmi_unreadable_line_is_reported),
     ("tailscale_online_direct", _check_tailscale_online_direct),
     ("tailscale_offline_derp", _check_tailscale_offline_derp),
     ("tailscale_empty_relay_is_none", _check_tailscale_empty_relay_is_none),

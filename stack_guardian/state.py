@@ -10,6 +10,30 @@ from pathlib import Path
 STATE_ENV = "STACK_GUARDIAN_STATE"
 KEEP = 5
 BAD = ("WARN", "FAIL")
+DIR_MODE = 0o700   # the state folder holds a snapshot of your machines: owner only
+FILE_MODE = 0o600  # env values, the fix audit and saved snapshots: owner only
+
+
+def _chmod(path, mode):
+    """Best effort: a filesystem without POSIX modes (Windows, FAT) keeps its own."""
+    try:
+        os.chmod(path, mode)
+    except OSError:
+        pass
+
+
+def private_dir(path):
+    """Create path (with parents) and keep it to the owner. Returns path."""
+    os.makedirs(path, exist_ok=True)
+    _chmod(path, DIR_MODE)
+    return path
+
+
+def private_open(path, mode="w", **kwargs):
+    """open() a file that only the owner can read, whether it is new or already there."""
+    handle = open(path, mode, opener=lambda name, flags: os.open(name, flags, FILE_MODE), **kwargs)
+    _chmod(path, FILE_MODE)
+    return handle
 
 
 def state_path() -> Path:
@@ -53,7 +77,7 @@ def save(state, path=None) -> None:
     if path is None:
         path = state_path()
     path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    private_dir(path.parent)  # mkstemp below already creates the file 0600
     fd, tmp_path = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
@@ -222,6 +246,17 @@ def _selftest():
             record_run(s, "gpu-box", [f("x.y")], "t1")
             return first is False and due(s, "gpu-box", "x.y", fail_after=2) is True
 
+        def t_state_dir_and_file_are_private():
+            if sys.platform == "win32":  # no POSIX modes to assert
+                return True
+            p = os.path.join(tmp, "private", "s.json")
+            save(record_run(fresh(), "gpu-box", [], "t0"), p)
+            with private_open(os.path.join(tmp, "private", "env")) as fh:
+                fh.write("X=1\n")
+            return (os.stat(os.path.dirname(p)).st_mode & 0o777 == DIR_MODE
+                    and os.stat(p).st_mode & 0o777 == FILE_MODE
+                    and os.stat(os.path.join(tmp, "private", "env")).st_mode & 0o777 == FILE_MODE)
+
         def t_env_path():
             os.environ[STATE_ENV] = os.path.join(tmp, "env.json")
             return state_path() == Path(tmp) / "env.json"
@@ -237,6 +272,7 @@ def _selftest():
             ("two_samples_verified", t_two_samples_verified),
             ("ok_finding_untouched", t_ok_finding_untouched),
             ("due_respects_fail_after", t_due_respects_fail_after),
+            ("state_dir_and_file_are_private", t_state_dir_and_file_are_private),
             ("env_path", t_env_path),
         ]
         passed = 0
