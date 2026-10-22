@@ -1,8 +1,9 @@
 # Changelog
 
-## Unreleased
+## stack-guardian 0.3.0 (2026-10-21)
 
 Review fixes (external review, 2026-10-21). Everything below has a test that was red before the change.
+`dsh-stack-guardian` stays at 0.1.0-alpha.2: nothing under `dsh/` changed since 0.2.1.
 
 - **Breaking: the nodes file is validated when it is read.** Migration: fix the node the error names, or add
   `"local": true` / `"tailnet_host": "NAME"` to a node that has no endpoints on purpose. Shapes that used to be
