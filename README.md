@@ -13,7 +13,7 @@ should get a graded, evidence-backed answer instead of a guess. A finding can ca
 purpose, never automatically. It ships as a CLI, an MCP server for coding agents, a tiny HTTP endpoint with Prometheus
 metrics, and a DeepSeek Harness (DSH) plugin.
 
-Status: **0.2.1.** Standard library only, Python 3.11+, no runtime dependencies.
+Status: **0.3.0.** Standard library only, Python 3.11+, no runtime dependencies.
 
 One of four small MIT-licensed tools for people running local models, each one doing a single job:
 [code-guardian](https://github.com/LuminariSoftwares/code-guardian) (review your own diff before anyone else sees
