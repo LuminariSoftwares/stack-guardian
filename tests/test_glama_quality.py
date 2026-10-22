@@ -1,5 +1,10 @@
-"""Glama scores each MCP tool on how its description and parameters read. Keep them informative: say when to use
-the tool and when to use a sibling instead, document every parameter, and keep the README's MCP section complete."""
+"""Glama scores each MCP tool on how its description and parameters read: say when to use the tool and when to use a
+sibling instead, document every parameter, and keep the README's MCP section complete.
+
+These are structural checks only. There is no minimum length here on purpose: tool definitions are sent on every
+request, so padding them to score better would cost the user tokens on every call. tests/test_tools_list_budget.py
+caps the other end.
+"""
 import json
 import re
 from pathlib import Path
@@ -15,8 +20,7 @@ NAMES = [t["name"] for t in TOOL_SPECS]
 def test_each_description_routes_to_its_siblings():
     for tool in TOOL_SPECS:
         desc = tool["description"]
-        assert len(desc) >= 200, tool["name"]
-        assert "Use " in desc or "Call " in desc, tool["name"]
+        assert "When to use:" in desc, tool["name"]
         for other in NAMES:
             if other != tool["name"]:
                 assert other in desc, (tool["name"], other)
@@ -25,7 +29,7 @@ def test_each_description_routes_to_its_siblings():
 def test_every_parameter_is_documented_with_an_example():
     for tool in TOOL_SPECS:
         for pname, spec in tool["inputSchema"]["properties"].items():
-            assert len(spec.get("description", "")) >= 60, (tool["name"], pname)
+            assert spec.get("description"), (tool["name"], pname)
             assert "e.g." in spec["description"] or "for example" in spec["description"], (tool["name"], pname)
 
 

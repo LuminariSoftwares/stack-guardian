@@ -5,7 +5,7 @@ import sys
 
 import pytest
 
-MODULES = ["finding", "parsers", "core", "state", "cli", "collect", "mcp_server", "multinode", "serve", "fixes"]
+MODULES = ["finding", "parsers", "core", "state", "cli", "collect", "mcp_server", "multinode", "nodes", "serve", "fixes"]
 
 
 @pytest.mark.parametrize("mod", MODULES)

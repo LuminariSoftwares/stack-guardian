@@ -13,12 +13,18 @@ license-files = ["LICENSE"]
 authors = [{ name = "LuminariSoftwares" }]
 keywords = ["ollama", "gpu", "vram", "tailscale", "health-check", "local-llm", "mcp"]
 classifiers = [
+  "Development Status :: 3 - Alpha",
   "Programming Language :: Python :: 3",
   "Operating System :: OS Independent",
   "Environment :: Console",
   "Topic :: System :: Monitoring",
 ]
 dependencies = []
+
+[project.optional-dependencies]
+# Nothing is needed to run stack-guardian. These are what `python -m pytest` needs: `build` because
+# tests/test_spdx_license.py builds a real wheel and reads the metadata setuptools wrote.
+test = ["pytest>=7", "build>=1"]
 
 [project.urls]
 Homepage = "https://github.com/LuminariSoftwares/stack-guardian"

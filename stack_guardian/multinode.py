@@ -6,11 +6,15 @@ Every node is handed to ``collect_one(name, cfg)`` in its own thread at the same
 instant, and a single overall deadline is applied to all of them. Whatever has
 not answered by the deadline is reported as down instead of being waited on, so
 a run always returns within ``timeout_s`` plus a little slack.
+
+The collector threads are daemon threads on purpose: a node that answers one
+byte at a time keeps its thread alive long after the deadline, and the report is
+only honest if the process ends with it rather than waiting for that node.
 """
 
-import concurrent.futures
 import json
 import sys
+import threading
 import time
 from datetime import datetime, timezone
 
@@ -28,29 +32,34 @@ def pull(nodes, collect_one, timeout_s=5.0, now=None):
     """
     items = list((nodes or {}).items())
     result = {}
-    if items:
-        executor = concurrent.futures.ThreadPoolExecutor(max_workers=len(items))
+    answers = {}  # name -> ("ok", value) | ("raised", exception); one writer per key, read after the deadline
+
+    def work(name, cfg):
         try:
-            futures = [
-                (name, executor.submit(collect_one, name, cfg if cfg is not None else {}))
-                for name, cfg in items
-            ]
-            concurrent.futures.wait([f for _, f in futures], timeout=timeout_s)
-            for name, future in futures:
-                if not future.done():
-                    result[name] = _down("timeout after %ss" % timeout_s)
-                    continue
-                try:
-                    value = future.result()
-                except Exception as exc:  # noqa: BLE001
-                    result[name] = _down("%s: %s" % (type(exc).__name__, exc))
-                    continue
-                if isinstance(value, dict):
-                    result[name] = value
-                else:
-                    result[name] = _down("collector returned %s" % type(value).__name__)
-        finally:
-            executor.shutdown(wait=False, cancel_futures=True)
+            answers[name] = ("ok", collect_one(name, cfg))
+        except BaseException as exc:  # noqa: BLE001 - whatever a collector throws is reported as a down node
+            answers[name] = ("raised", exc)
+
+    threads = []
+    for name, cfg in items:
+        thread = threading.Thread(target=work, args=(name, cfg if cfg is not None else {}),
+                                  name="stack-guardian-collect", daemon=True)
+        thread.start()
+        threads.append(thread)
+    deadline = time.monotonic() + timeout_s
+    for thread in threads:
+        thread.join(max(0.0, deadline - time.monotonic()))
+    for name, _cfg in items:
+        answered = answers.get(name)
+        if answered is None:
+            result[name] = _down("timeout after %ss" % timeout_s)
+        elif answered[0] == "raised":
+            exc = answered[1]
+            result[name] = _down("%s: %s" % (type(exc).__name__, exc))
+        elif isinstance(answered[1], dict):
+            result[name] = answered[1]
+        else:
+            result[name] = _down("collector returned %s" % type(answered[1]).__name__)
     return {
         "schema": 1,
         "taken_at": now or datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -118,6 +127,21 @@ def _selftest():
         took = time.monotonic() - t0
         return all(n["reachable"] for n in r["nodes"].values()) and took < 0.8
 
+    def c_collector_threads_are_daemon():
+        """A node that never answers must not keep the process alive after the report."""
+        stay = threading.Event()
+        seen = {}
+
+        def peek(name, cfg):
+            seen["daemon"] = threading.current_thread().daemon
+            stay.wait(30)
+            return {"reachable": True}
+        try:
+            pull({"h": {}}, peek, timeout_s=0.2, now="T")
+            return seen.get("daemon") is True
+        finally:
+            stay.set()
+
     def c_empty():
         r = pull({}, fake, now="T")
         return r == {"schema": 1, "taken_at": "T", "nodes": {}} and pull(None, fake, now="T")["nodes"] == {}
@@ -132,6 +156,7 @@ def _selftest():
     checks = [("order_and_shape", c_order_and_shape), ("cfg_passed_and_none_cfg", c_cfg_passed_and_none_cfg),
               ("raise_becomes_down", c_raise_becomes_down), ("non_dict_becomes_down", c_non_dict_becomes_down),
               ("hang_times_out_fast", c_hang_times_out_fast), ("concurrent_not_serial", c_concurrent_not_serial),
+              ("collector_threads_are_daemon", c_collector_threads_are_daemon),
               ("empty", c_empty), ("default_now_is_iso", c_default_now_is_iso), ("elapsed_ok", c_elapsed_ok)]
     passed = failed = 0
     for name, fn in checks:

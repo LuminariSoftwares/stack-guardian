@@ -29,9 +29,10 @@
       "latency_ms": null,
       "ollama": [],
       "gpus": [],
-      "gpu_error": "nvidia-smi unavailable (not installed, or it failed)",
+      "gpu_error": "nvidia-smi is not on PATH (NVIDIA GPUs only: this is how stack-guardian reads them)",
+      "gpu_unreadable": ["nvidia-smi line 1 has a field this parser cannot read (such as \"[N/A]\"): 0, GPU-0001, NVIDIA RTX A2000, [N/A], [N/A]"],
       "tailnet": {"peer": null, "direct": null, "derp": null, "ips": [],
-                  "error": "tailscale status failed (tailscale missing or tailscaled down)"}
+                  "error": "tailscale is not on PATH (this machine is not on a tailnet)"}
     }
   }
 }

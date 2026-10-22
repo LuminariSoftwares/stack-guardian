@@ -128,7 +128,7 @@ def make_handler(get_snapshot, metrics=None):
 def make_server(get_snapshot, host="127.0.0.1", port=0, allow_remote=False, metrics=None):
     """Build (but do not start) a threaded server, refusing non-loopback binds."""
     if host not in LOOPBACK and not allow_remote:
-        raise ValueError("refusing to bind %s without allow_remote=True" % host)
+        raise ValueError("%s is not a loopback address, and this server has no auth" % host)
     return http.server.ThreadingHTTPServer((host, port), make_handler(get_snapshot, metrics))
 
 
@@ -141,28 +141,64 @@ def _opt(argv, name):
     return None
 
 
+USAGE = ("stack-guardian-serve: usage: --nodes FILE [--ctx FILE] [--port N] [--cache SECONDS] "
+         "[--host H --allow-remote]")
+
+
+def cached(fn, ttl_s, clock=time.monotonic):
+    """fn, reusing its last result for ttl_s seconds. ttl_s <= 0 calls fn every time (the default)."""
+    if ttl_s <= 0:
+        return fn
+    last = {"at": None, "value": None}
+
+    def call():
+        now = clock()
+        if last["at"] is None or now - last["at"] >= ttl_s:
+            last["value"], last["at"] = fn(), now
+        return last["value"]
+    return call
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     if "--selftest" in argv:
         return _selftest()
-    nodes = _opt(argv, "--nodes")
-    if nodes is None:
-        print("stack-guardian-serve: usage: --nodes FILE [--ctx FILE] [--port N] [--host H --allow-remote]",
-              file=sys.stderr)
+    nodes_path = _opt(argv, "--nodes")
+    if nodes_path is None:
+        print(USAGE, file=sys.stderr)
         return 3
     from . import collect as sg_collect
+    from . import nodes as sg_nodes
+
+    try:
+        sg_nodes.load(nodes_path)  # fail at startup, not on the first request
+        cache_s = float(_opt(argv, "--cache") or 0)
+        port = int(_opt(argv, "--port") or "8788")
+    except (OSError, ValueError) as exc:
+        print("stack-guardian-serve: usage: %s" % exc, file=sys.stderr)
+        return 3
 
     def snap():
-        with open(nodes, encoding="utf-8") as fh:
-            return sg_collect.snapshot(json.load(fh))
+        nodes, options = sg_nodes.load(nodes_path)  # re-read: the file may have been edited since startup
+        return sg_collect.snapshot(nodes, timeout_s=sg_nodes.timeout_s(options))
 
     ctx = None
     if _opt(argv, "--ctx"):
         with open(_opt(argv, "--ctx"), encoding="utf-8") as fh:
             ctx = json.load(fh)
-    server = make_server(snap, _opt(argv, "--host") or "127.0.0.1",
-                         int(_opt(argv, "--port") or "8788"), "--allow-remote" in argv, metrics=Metrics(ctx=ctx))
-    print("serving http://%s:%d/snapshot and /metrics" % server.server_address[:2], flush=True)
+    try:
+        server = make_server(cached(snap, cache_s), _opt(argv, "--host") or "127.0.0.1",
+                             port, "--allow-remote" in argv, metrics=Metrics(ctx=ctx))
+    except ValueError as exc:  # a non-loopback bind without --allow-remote: one line, never a traceback
+        print("stack-guardian-serve: usage: %s; add --allow-remote if you mean it" % exc, file=sys.stderr)
+        return 3
+    except OSError as exc:  # the port is taken, or the address is not this machine's
+        print("stack-guardian-serve: cannot listen on %s:%d: %s" % (_opt(argv, "--host") or "127.0.0.1", port, exc),
+              file=sys.stderr)
+        return 3
+    print("serving http://%s:%d/snapshot and /metrics%s"
+          % (server.server_address[0], server.server_address[1],
+             " (each snapshot reused for %gs)" % cache_s if cache_s > 0 else ""), flush=True)
     server.serve_forever()
     return 0
 
@@ -225,16 +261,37 @@ def _selftest():
         def c_loopback_default():
             return s.server_address[0] == "127.0.0.1"
 
+        def c_cache_off_by_default_and_on_when_asked():
+            ticks = iter([0.0, 0.1, 0.2, 5.0])
+            calls = {"n": 0}
+
+            def count():
+                calls["n"] += 1
+                return calls["n"]
+            fresh = cached(count, 0)
+            held = cached(count, 1.0, clock=lambda: next(ticks))
+            return (fresh() != fresh() and held() == held() and held() != held())
+
+        def c_remote_bind_without_allow_remote_is_usage_3(tmp=None):
+            import tempfile
+            with tempfile.TemporaryDirectory() as folder:
+                path = os.path.join(folder, "nodes.json")
+                with open(path, "w", encoding="utf-8") as fh:
+                    json.dump({"gpu-box": {"ollama": ["http://127.0.0.1:11434"]}}, fh)
+                return main(["--nodes", path, "--host", "0.0.0.0", "--port", "0"]) == 3  # nosec B104 - nothing binds
+
         def c_remote_refused():
             try:
                 make_server(snap, host="0.0.0.0")  # nosec B104 - asserts the refusal; nothing binds
             except ValueError as exc:
-                return "allow_remote" in str(exc)
+                return "no auth" in str(exc)
             return False
 
         checks = [("snapshot", c_snapshot), ("fresh_each_call", c_fresh_each_call), ("health", c_health),
                   ("not_found", c_not_found), ("post_refused", c_post_refused), ("delete_refused", c_delete_refused),
                   ("collector_error_500", c_collector_error_500), ("loopback_default", c_loopback_default),
+                  ("cache_off_by_default_and_on_when_asked", c_cache_off_by_default_and_on_when_asked),
+                  ("remote_bind_without_allow_remote_is_usage_3", c_remote_bind_without_allow_remote_is_usage_3),
                   ("remote_refused", c_remote_refused)]
         passed = failed = 0
         for name, fn in checks:

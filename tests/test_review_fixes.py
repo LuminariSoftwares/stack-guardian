@@ -99,7 +99,7 @@ def test_mcp_health_grades_against_existing_state(tmp_path):
 def test_mcp_health_ttl_cache(tmp_path, monkeypatch):
     calls = []
     now = [100.0]
-    monkeypatch.setattr(collect, "snapshot", lambda nodes: calls.append(1) or {"schema": 1, "taken_at": "T", "nodes": {}})
+    monkeypatch.setattr(collect, "snapshot", lambda nodes, **kw: calls.append(1) or {"schema": 1, "taken_at": "T", "nodes": {}})
     tools = mcp_server.default_tools(_dead_nodes(tmp_path), state_path=str(tmp_path / "s.json"), clock=lambda: now[0])
     tools["stack_health"]({})
     tools["stack_health"]({})
@@ -262,8 +262,9 @@ def test_example_snapshot_fires_every_shipped_rule(tmp_path):
 
 def test_readme_offline_first_agents_section_and_serve_warning():
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    offline = readme.index("stack-guardian doctor --snapshot examples/snapshot.json")
-    assert offline < readme.index("stack-guardian doctor --nodes")
+    first_run = readme.index("stack-guardian doctor ")
+    assert readme[first_run:].startswith("stack-guardian doctor --snapshot"), "the first command shown is the offline one"
+    assert first_run < readme.index("stack-guardian doctor --nodes")
     agents = readme.index("## For coding agents")
     assert agents < readme.index("## What it does")
     assert "stack-guardian-mcp" in readme[agents:] and "dsh/" in readme[agents:]
