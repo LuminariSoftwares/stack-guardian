@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- **Releases are published by trusted publishing (OIDC).** Publishing a GitHub Release runs
+  `.github/workflows/release.yml`: it fails unless the tag is `v` + the `pyproject.toml` version, runs the tests,
+  builds and `twine check`s the sdist and wheel, and uploads them to PyPI with a short-lived credential and signed
+  attestations. No stored PyPI token. Owner setup and release steps: `docs/RELEASING.md`.
+
 ## stack-guardian 0.3.0 (2026-10-21)
 
 Review fixes (external review, 2026-10-21). Everything below has a test that was red before the change.

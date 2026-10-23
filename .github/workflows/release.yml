@@ -1,0 +1,95 @@
+name: release
+
+# Publishing a GitHub Release builds the tagged commit and uploads it to PyPI by trusted publishing (OIDC):
+# PyPI trusts this workflow in the `pypi` environment, so no long-lived token exists, and every file carries a signed
+# attestation tying it to the commit. Setup and the release steps are in docs/RELEASING.md.
+# A pull request that touches the release path, or a manual run with dry_run, verifies and builds but never publishes.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build, e.g. v0.3.0"
+        required: true
+        type: string
+      dry_run:
+        description: "Verify and build only; do not publish"
+        required: true
+        type: boolean
+        default: true
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - scripts/check_release_tag.py
+      - tests/test_release_workflow.py
+      - pyproject.toml
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: tag matches pyproject.toml, tests pass
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.tag || github.ref }}
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.11"
+      - name: Tag matches the version
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: python scripts/check_release_tag.py "$RELEASE_TAG"
+      - name: Install
+        run: python -m pip install -e ".[test]"
+      - name: Test
+        run: python -m pytest -q
+
+  build:
+    name: build sdist + wheel, twine check
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.tag || github.ref }}
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.11"
+      - name: Build
+        run: python -m pip install build twine && python -m build --outdir dist .
+      - name: twine check
+        run: python -m twine check --strict dist/* && ls -l dist
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  pypi:
+    # Only a published release, or a manual run with dry_run off, reaches PyPI. The build ran in the job above, so
+    # the OIDC grant below is never held while build-backend code runs.
+    name: publish to PyPI (trusted publishing)
+    needs: build
+    if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run)
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/stack-guardian/
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
+        with:
+          attestations: true
