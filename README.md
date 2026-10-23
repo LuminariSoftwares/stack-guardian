@@ -13,13 +13,40 @@ should get a graded, evidence-backed answer instead of a guess. A finding can ca
 purpose, never automatically. It ships as a CLI, an MCP server for coding agents, a tiny HTTP endpoint with Prometheus
 metrics, and a DeepSeek Harness (DSH) plugin.
 
+Two runs against [examples/nodes.json](examples/nodes.json) with one state file:
+
+<!-- demo-report:start -->
+```
+# run 1
+FAIL ollama.unreachable [gpu-box-2]: 1 Ollama endpoint(s) do not answer: http://100.64.0.2:11434 (LIKELY)
+FAIL ollama.unreachable [home-server]: 1 Ollama endpoint(s) do not answer: http://100.64.0.3:11434 (LIKELY)
+FAIL tailnet.peer_offline [home-server]: tailnet peer offline: home-server (LIKELY)
+WARN model.expiring [gpu-box]: 1 loaded model(s) unload within 60s: qwen3:8b (LIKELY)
+OK   ollama.answering [gpu-box]: 1 endpoint(s) answer: http://127.0.0.1:11434
+worst: FAIL
+# run 2 (same state file)
+FAIL ollama.unreachable [gpu-box-2]: 1 Ollama endpoint(s) do not answer: http://100.64.0.2:11434 (VERIFIED)
+FAIL ollama.unreachable [home-server]: 1 Ollama endpoint(s) do not answer: http://100.64.0.3:11434 (VERIFIED)
+FAIL tailnet.peer_offline [home-server]: tailnet peer offline: home-server (VERIFIED)
+WARN model.expiring [gpu-box]: 1 loaded model(s) unload within 60s: qwen3:8b (VERIFIED)
+OK   ollama.answering [gpu-box]: 1 endpoint(s) answer: http://127.0.0.1:11434
+worst: FAIL
+```
+<!-- demo-report:end -->
+
+That is the real output of `python examples/demo_report.py`: the shipped collector and rules, with a stub Ollama on
+`127.0.0.1` answering for gpu-box, the two placeholder tailnet addresses never contacted, and sample `nvidia-smi` and
+`tailscale` output so it prints the same on any machine. The shipped rules only report problems; the `OK` line comes
+from a small rule inside the script. A test fails if this block and the script disagree.
+
+**Why the grade.** One run can make a finding at most `LIKELY`; the same finding on two runs in a row makes it
+`VERIFIED`; passing checks are not graded. On a home network a sleeping laptop, a Wi-Fi drop or a model being
+reloaded looks broken for a few seconds, so one bad sample is reported as a likely problem and only what persists is
+reported as fact.
+
 Status: **0.3.0.** Standard library only, Python 3.11+, no runtime dependencies.
 
-One of four small MIT-licensed tools for people running local models, each one doing a single job:
-[code-guardian](https://github.com/LuminariSoftwares/code-guardian) (review your own diff before anyone else sees
-it), [context-guardian](https://github.com/LuminariSoftwares/context-guardian) (keep a long session inside its
-context window), [tool-guardian](https://github.com/LuminariSoftwares/tool-guardian) (check an MCP server's tool
-definitions) and this one (check the machines underneath). They share no code and are useful separately.
+One of four small, independent tools for people running local models: see [The guardian family](#the-guardian-family).
 
 *Not affiliated with StackGuardian, the infrastructure-automation company. Same word, unrelated projects.*
 
@@ -359,6 +386,7 @@ one per node.
 | `examples/snapshot.json` | an offline snapshot on which every shipped rule fires once, for trying `doctor` and `--fix` |
 | `examples/lanes.json` | the lanes `restart_lane` is allowed to run |
 | `examples/checks.d/20_ollama_fix.py` | a custom rule whose finding carries a fix |
+| `examples/demo_report.py` | prints the two-run report at the top of this README: a stub Ollama on 127.0.0.1, no other network |
 
 ## Troubleshooting
 
@@ -460,6 +488,19 @@ No code is copied from other projects. The wire formats follow their public spec
 [Prometheus text exposition format](https://prometheus.io/docs/instrumenting/exposition_formats/). The data comes from
 the documented interfaces of [Ollama](https://github.com/ollama/ollama/blob/main/docs/api.md), `nvidia-smi` and
 `tailscale status --json`.
+
+<!-- guardian-family:start -->
+## The guardian family
+
+Four small MIT-licensed tools for people running local models. Each does one job, they share no code, and each is useful on its own.
+
+| tool | what it answers |
+|---|---|
+| [code-guardian](https://github.com/LuminariSoftwares/code-guardian) | Before you run or merge code you did not write: is it safe, does it work, is anything missing? Three scores from a static scan, Python in depth. |
+| [context-guardian](https://github.com/LuminariSoftwares/context-guardian) | Keeps a long local-model session inside its context window: a proxy that compacts history before the window fills, with tools to search what was archived. |
+| [tool-guardian](https://github.com/LuminariSoftwares/tool-guardian) | Routes many MCP servers through a few tools, so their definitions stop filling the context window. |
+| [stack-guardian](https://github.com/LuminariSoftwares/stack-guardian) | Is my home AI stack healthy? Ollama / OpenAI-compatible nodes, NVIDIA GPUs and Tailscale peers, with a confidence grade on every finding. |
+<!-- guardian-family:end -->
 
 ## License
 
