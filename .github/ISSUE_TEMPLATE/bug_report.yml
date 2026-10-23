@@ -1,0 +1,62 @@
+name: Bug report
+description: Something stack-guardian does is wrong or crashes.
+labels: ["needs-info"]
+body:
+  - type: markdown
+    id: intro
+    attributes:
+      value: |
+        stack-guardian is maintained by one person, in the evenings. You will get an acknowledgement within a day;
+        reproducing and fixing takes longer. See [SUPPORT.md](https://github.com/LuminariSoftwares/stack-guardian/blob/main/SUPPORT.md).
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The output of `stack-guardian --version`.
+      placeholder: stack-guardian X.Y.Z
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: Windows 11, Ubuntu 24.04, macOS 15 ...
+    validations:
+      required: true
+  - type: input
+    id: python
+    attributes:
+      label: Python version
+      description: The output of `python --version`.
+      placeholder: Python 3.11.9
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: The exact command
+      description: Copy it as you typed it, flags included.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: The full output
+      description: Everything it printed, including any traceback. Remove anything private (host names, addresses) first.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: checkboxes
+    id: quick-start
+    attributes:
+      label: Before you submit
+      options:
+        - label: I ran the quick start as written
+          required: true
