@@ -1,5 +1,7 @@
 # Contributing
 
+Need help? See [SUPPORT.md](SUPPORT.md).
+
 Issues and pull requests are welcome. It is a small project; the rules below are what keeps it small.
 
 ## Getting set up

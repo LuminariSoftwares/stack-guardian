@@ -1,0 +1,30 @@
+name: Feature request
+description: Suggest something stack-guardian should do.
+body:
+  - type: markdown
+    id: intro
+    attributes:
+      value: |
+        Requests are welcome and may be answered "later" or "not here", with the reason. There is no promised timeline.
+        Please read [SUPPORT.md](https://github.com/LuminariSoftwares/stack-guardian/blob/main/SUPPORT.md) first for what the project will not do.
+  - type: textarea
+    id: goal
+    attributes:
+      label: What you are trying to do
+      description: The job you are trying to get done, not the feature you have in mind.
+    validations:
+      required: true
+  - type: textarea
+    id: tried
+    attributes:
+      label: What you tried
+      description: Commands, flags, rules or workarounds, and what happened.
+    validations:
+      required: true
+  - type: textarea
+    id: change
+    attributes:
+      label: What would change
+      description: What you could do with this that you cannot do today.
+    validations:
+      required: true
