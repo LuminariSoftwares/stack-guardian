@@ -11,6 +11,7 @@ collector and the shipped rules against it twice with one fresh state file, prin
 - nvidia-smi and tailscale are not run: fixed sample output stands in for them, so the report does not depend on
   this machine's GPUs or tailnet.
 - The shipped rules only report problems, so one extra rule below reports the endpoints that answer as OK.
+  Only WARN and FAIL findings are graded, so its line is printed without a grade.
 
 tests/test_demo_report.py fails if the README block and this script's output differ.
 """
@@ -106,6 +107,9 @@ def report():
                     sg_state.record_run(history, node, findings, snap["taken_at"])
                 sg_state.save(history, state)
                 graded = [sg_state.grade(history, f["node"], f) for f in findings]
+                for f in graded:  # only WARN and FAIL are graded, so a passing check prints without one
+                    if f["level"] not in sg_state.BAD:
+                        f["confidence"] = ""
                 out.append("# run %d%s" % (n, " (same state file)" if n > 1 else ""))
                 out.append(core.render(graded))
     finally:

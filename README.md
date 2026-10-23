@@ -22,14 +22,14 @@ FAIL ollama.unreachable [gpu-box-2]: 1 Ollama endpoint(s) do not answer: http://
 FAIL ollama.unreachable [home-server]: 1 Ollama endpoint(s) do not answer: http://100.64.0.3:11434 (LIKELY)
 FAIL tailnet.peer_offline [home-server]: tailnet peer offline: home-server (LIKELY)
 WARN model.expiring [gpu-box]: 1 loaded model(s) unload within 60s: qwen3:8b (LIKELY)
-OK   ollama.answering [gpu-box]: 1 endpoint(s) answer: http://127.0.0.1:11434 (LIKELY)
+OK   ollama.answering [gpu-box]: 1 endpoint(s) answer: http://127.0.0.1:11434
 worst: FAIL
 # run 2 (same state file)
 FAIL ollama.unreachable [gpu-box-2]: 1 Ollama endpoint(s) do not answer: http://100.64.0.2:11434 (VERIFIED)
 FAIL ollama.unreachable [home-server]: 1 Ollama endpoint(s) do not answer: http://100.64.0.3:11434 (VERIFIED)
 FAIL tailnet.peer_offline [home-server]: tailnet peer offline: home-server (VERIFIED)
 WARN model.expiring [gpu-box]: 1 loaded model(s) unload within 60s: qwen3:8b (VERIFIED)
-OK   ollama.answering [gpu-box]: 1 endpoint(s) answer: http://127.0.0.1:11434 (LIKELY)
+OK   ollama.answering [gpu-box]: 1 endpoint(s) answer: http://127.0.0.1:11434
 worst: FAIL
 ```
 <!-- demo-report:end -->
@@ -40,8 +40,9 @@ That is the real output of `python examples/demo_report.py`: the shipped collect
 from a small rule inside the script. A test fails if this block and the script disagree.
 
 **Why the grade.** One run can make a finding at most `LIKELY`; the same finding on two runs in a row makes it
-`VERIFIED`. On a home network a sleeping laptop, a Wi-Fi drop or a model being reloaded looks broken for a few
-seconds, so one bad sample is reported as a likely problem and only what persists is reported as fact.
+`VERIFIED`; passing checks are not graded. On a home network a sleeping laptop, a Wi-Fi drop or a model being
+reloaded looks broken for a few seconds, so one bad sample is reported as a likely problem and only what persists is
+reported as fact.
 
 Status: **0.3.0.** Standard library only, Python 3.11+, no runtime dependencies.
 
