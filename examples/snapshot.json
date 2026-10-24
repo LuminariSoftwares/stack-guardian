@@ -18,6 +18,16 @@
       "tailnet": {"peer": true, "direct": false, "derp": "ord", "ips": ["100.64.0.2"]}
     },
     "home-server": {"reachable": false, "error": "timeout after 10.0s", "ollama": []},
+    "studio": {
+      "reachable": true,
+      "latency_ms": 2600,
+      "ollama": [],
+      "openai": [
+        {"url": "http://192.0.2.7:1234/v1", "kind": "openai", "error": null, "latency_ms": 2600, "models": ["qwen2.5-7b-instruct"]},
+        {"url": "http://192.0.2.7:8000/v1", "kind": "openai", "error": null, "latency_ms": 41, "models": []},
+        {"url": "http://192.0.2.7:4000/v1", "kind": "openai", "error": "URLError: <urlopen error [Errno 111] Connection refused>", "latency_ms": null, "models": []}
+      ]
+    },
     "nas": {
       "reachable": false,
       "latency_ms": null,

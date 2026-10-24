@@ -3,7 +3,11 @@
 A nodes file is a JSON object of node name -> settings:
 
     {"gpu-box": {"ollama": ["http://127.0.0.1:11434"], "local": true},
-     "studio":  {"kind": "openai", "endpoints": ["http://127.0.0.1:1234"]}}
+     "studio":  {"openai": ["http://127.0.0.1:1234/v1"], "api_key_env": "STUDIO_API_KEY"}}
+
+"openai" lists OpenAI-compatible base URLs (LM Studio, llama.cpp, vLLM, LiteLLM) beside or instead of "ollama";
+"api_key_env" names the environment variable holding that node's bearer token, never the token itself.
+The older {"kind": "openai", "endpoints": [...]} form is still read, with its original meaning.
 
 Keys whose name starts with "_" are ignored, so a file can carry comments and
 candidate nodes it is not using yet; "_options" is read for run settings
@@ -13,12 +17,14 @@ the callers turn that into a usage error rather than a crash or a silent OK.
 """
 
 import json
+import re
 import sys
 
 OPTIONS_KEY = "_options"
 DEFAULT_TIMEOUT_S = 10.0
 TTFT_TIMEOUT_S = 30.0
 KINDS = {"ollama": "ollama", "openai": "endpoints"}  # kind -> the key holding its base URLs
+ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 EXAMPLE = '{"gpu-box": {"ollama": ["http://127.0.0.1:11434"], "local": true}}'
 
 
@@ -52,6 +58,21 @@ def _urls(name, key, value, warn):
     return list(value)
 
 
+def _api_key_env(name, cfg):
+    """The validated api_key_env: the NAME of an environment variable. A value that is not a plausible variable name
+    is probably the key itself pasted in, so the message never repeats it."""
+    value = cfg.get("api_key_env")
+    if value is None:
+        return None
+    if not cfg.get("openai"):
+        raise NodesError('node "%s": "api_key_env" goes with an "openai" list of base URLs, for example '
+                         '{"openai": ["http://127.0.0.1:1234/v1"], "api_key_env": "STUDIO_API_KEY"}' % name)
+    if not isinstance(value, str) or not ENV_NAME.match(value):
+        raise NodesError('node "%s": "api_key_env" must be the NAME of an environment variable, for example '
+                         '"STUDIO_API_KEY", not the key itself' % name)
+    return value
+
+
 def _node(name, cfg, warn):
     """One validated node config, or NodesError naming the node and the shape it needs."""
     if cfg is None:
@@ -67,9 +88,14 @@ def _node(name, cfg, warn):
                          'OpenAI-compatible node (LM Studio, vLLM, llama.cpp) is {"kind": "openai", "endpoints": [...]}'
                          % (name, other, kind))
     urls = _urls(name, key, cfg.get(key), warn)
-    if not urls and not cfg.get("local") and not cfg.get("tailnet_host"):
-        raise NodesError('node "%s" has nothing to probe: give it "%s": ["http://HOST:PORT"], "local": true for this '
+    openai = _urls(name, "openai", cfg.get("openai"), warn)
+    if "openai" in cfg:
+        cfg = dict(cfg, openai=openai)
+    if not urls and not openai and not cfg.get("local") and not cfg.get("tailnet_host"):
+        raise NodesError('node "%s" has nothing to probe: give it "%s": ["http://HOST:PORT"] (or "openai": '
+                         '["http://HOST:PORT/v1"] for an OpenAI-compatible server), "local": true for this '
                          'machine\'s GPUs, or "tailnet_host": "NAME" for a tailnet peer' % (name, key))
+    _api_key_env(name, cfg)
     return dict(cfg, **{key: urls})
 
 

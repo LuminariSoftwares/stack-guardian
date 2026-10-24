@@ -271,7 +271,7 @@ def starter_nodes(ollama_url=LOCAL_OLLAMA, answered=False, peers=()):
     doc = {"_README": ["Written by stack-guardian init. Every key starting with _ is ignored, so these lines and the",
                        "candidates below are comments. A node takes \"ollama\": [URLs], \"local\": true to read this",
                        "machine's GPUs with nvidia-smi, and \"tailnet_host\": \"NAME\" to look the peer up in tailscale.",
-                       "An LM Studio / vLLM / llama.cpp node is {\"kind\": \"openai\", \"endpoints\": [URLs]}.",
+                       "An LM Studio / llama.cpp / vLLM / LiteLLM node is {\"openai\": [\"http://HOST:PORT/v1\"]}.",
                        note],
            "_options": {"timeout_s": 10},
            "this-machine": {"ollama": [ollama_url], "local": True}}

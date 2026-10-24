@@ -8,11 +8,13 @@ import pytest
 
 
 class Stub:
-    """routes: {(method, path): (status, body, delay_s)}; body is a dict/list (sent as JSON) or a str."""
+    """routes: {(method, path): (status, body, delay_s[, headers])}; body is a dict/list (sent as JSON) or a str,
+    headers an optional dict of extra response headers (a redirect's Location, for one)."""
 
     def __init__(self, routes):
         self.routes = dict(routes)
         self.requests = []  # (method, path, parsed JSON body or None)
+        self.headers = []  # the request headers of each entry in requests, lower-cased
         stub = self
 
         class Handler(http.server.BaseHTTPRequestHandler):
@@ -20,12 +22,15 @@ class Stub:
                 length = int(self.headers.get("Content-Length") or 0)
                 raw = self.rfile.read(length) if length else b""
                 stub.requests.append((method, self.path, json.loads(raw) if raw else None))
-                status, body, delay = stub.routes.get((method, self.path), (404, {"error": "not found"}, 0))
+                stub.headers.append({k.lower(): v for k, v in self.headers.items()})
+                status, body, delay, *extra = stub.routes.get((method, self.path), (404, {"error": "not found"}, 0))
                 data = (body if isinstance(body, str) else json.dumps(body)).encode("utf-8")
                 if delay:
                     time.sleep(delay)
                 self.send_response(status)
                 self.send_header("Content-Type", "application/json")
+                for key, value in (extra[0] if extra else {}).items():
+                    self.send_header(key, value)
                 self.send_header("Content-Length", str(len(data)))
                 self.end_headers()
                 self.wfile.write(data)
