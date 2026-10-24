@@ -4,13 +4,13 @@
   "title": "Stack Guardian",
   "description": "Health doctor for a home AI stack: Ollama nodes, GPUs and tailnet, with graded confidence.",
   "repository": {"url": "https://github.com/LuminariSoftwares/stack-guardian", "source": "github"},
-  "version": "0.3.0",
+  "version": "0.4.0",
   "packages": [
     {
       "registryType": "pypi",
       "registryBaseUrl": "https://pypi.org",
       "identifier": "stack-guardian",
-      "version": "0.3.0",
+      "version": "0.4.0",
       "runtimeHint": "uvx",
       "transport": {"type": "stdio"},
       "packageArguments": [{"type": "positional", "value": "mcp"}],

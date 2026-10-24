@@ -44,7 +44,7 @@ from a small rule inside the script. A test fails if this block and the script d
 reloaded looks broken for a few seconds, so one bad sample is reported as a likely problem and only what persists is
 reported as fact.
 
-Status: **0.3.0.** Standard library only, Python 3.11+, no runtime dependencies.
+Status: **0.4.0.** Standard library only, Python 3.11+, no runtime dependencies.
 
 One of four small, independent tools for people running local models: see [The guardian family](#the-guardian-family).
 
@@ -261,8 +261,9 @@ Describe your nodes in a JSON file (see [examples/nodes.json](examples/nodes.jso
 stack-guardian doctor --nodes examples/nodes.json --ctx examples/ctx.json
 ```
 
-A node entry takes `ollama` (a list of base URLs), `local: true` (read GPUs with `nvidia-smi` on this machine) and
-`tailnet_host` (look the peer up in this machine's `tailscale status`). With neither `--snapshot` nor `--nodes`,
+A node entry takes `ollama` (a list of base URLs), `openai` (a list of OpenAI-compatible base URLs, see
+[OpenAI-compatible servers](#openai-compatible-servers)), `local: true` (read GPUs with `nvidia-smi` on this machine)
+and `tailnet_host` (look the peer up in this machine's `tailscale status`). With neither `--snapshot` nor `--nodes`,
 `doctor` reads the nodes file named by `$STACK_GUARDIAN_NODES`.
 
 Options: `--checks-dir DIR` (your own rules, default is the shipped `checks.d`), `--ctx FILE` (rule settings such as
@@ -274,8 +275,8 @@ the model each node is expected to hold), `--state FILE` (default `$STACK_GUARDI
 Every node is probed at once under that one deadline, and the process ends with the report: a node that answers one
 byte at a time is written off as `node.unreachable`, not waited for.
 
-The nodes file is validated when it is read. A node needs something to probe (`ollama`, `endpoints` with
-`"kind": "openai"`, `local: true`, or `tailnet_host`), and URLs need a scheme; anything else is a usage error
+The nodes file is validated when it is read. A node needs something to probe (`ollama`, `openai`, `endpoints` with
+the older `"kind": "openai"` form, `local: true`, or `tailnet_host`), and URLs need a scheme; anything else is a usage error
 (exit `3`) naming the node, rather than a confident wrong answer. A single URL string where a list belongs is
 accepted, with one note on stderr. Keys starting with `_` are ignored, so a file can carry comments and candidate
 nodes; `"_options": {"timeout_s": 20}` sets the deadline for that file.
@@ -286,19 +287,14 @@ finding has been seen twice - and `worst: X` stays the last line. `--json` print
 
 Exit codes: `0` all OK/INFO, `1` a WARN, `2` a FAIL, `3` usage, `4` the doctor itself crashed.
 
-Shipped rules: `node.unreachable`, `ollama.unreachable`, `model.not_loaded`, `model.expiring`, `model.slow_ttft`,
-`vram.unattributed`, `gpu.unavailable`, `gpu.parse_degraded`, `tailnet.unavailable`, `tailnet.peer_offline`,
+Shipped rules: `node.unreachable`, `ollama.unreachable`, `openai.unreachable`, `openai.no_models`, `openai.slow`,
+`model.not_loaded`, `model.expiring`, `model.slow_ttft`, `vram.unattributed`, `gpu.unavailable`, `gpu.parse_degraded`, `tailnet.unavailable`, `tailnet.peer_offline`,
 `tailnet.relayed`. Each raises
 one finding per affected node. A rule that raises becomes a `check.crashed` WARN - a buggy rule never reports a broken
 stack.
 
-**LM Studio, vLLM, llama.cpp server.** Give the node `"kind": "openai"` and list its base URLs under `endpoints`.
-It is read from `GET /v1/models` (and `GET /v1/models/<id>` when the server has it) into the same shape as an Ollama
-endpoint, so every rule above applies; a model a server lists as unloaded does not count as loaded.
-
-```
-{"gpu-box": {"kind": "openai", "endpoints": ["http://127.0.0.1:1234"]}}
-```
+Servers that speak the OpenAI API (LM Studio, llama.cpp, vLLM, LiteLLM) are covered by
+[OpenAI-compatible servers](#openai-compatible-servers) below.
 
 **`model.expiring`** (WARN): a loaded Ollama model whose `/api/ps` `expires_at` is within 60 s of the snapshot time;
 INFO when `/api/ps` is unavailable. Change the window with `"model_expiring_s": 120` in `--ctx`.
@@ -318,6 +314,47 @@ keeps each model's unload time as it was. `model.slow_ttft` (INFO) fires above 2
 ```
 stack-guardian doctor --nodes examples/nodes.json --ttft
 ```
+
+### OpenAI-compatible servers
+
+LM Studio, llama.cpp's `llama-server`, vLLM and LiteLLM serve models over the OpenAI API. Give a node an `openai`
+list of base URLs - the part before `/models`, usually ending in `/v1` - beside or instead of `ollama`:
+
+```
+{
+  "gpu-box": {"ollama": ["http://127.0.0.1:11434"], "local": true},
+  "studio":  {"openai": ["http://127.0.0.1:1234/v1", "http://192.0.2.7:8000/v1"]},
+  "proxy":   {"openai": ["http://100.64.0.1:4000/v1"], "api_key_env": "PROXY_API_KEY"}
+}
+```
+
+Each endpoint is probed with `GET <base>/models`, under the same single deadline as everything else. The snapshot
+records, per endpoint, whether it answered, how long that took and the model ids it lists (`node.openai[]`; at most
+200 ids, with `models_total` when there were more). `api_key_env` names an environment variable that holds the
+bearer token for the node's `openai` endpoints; the token itself is not in the nodes file, the snapshot, the
+state folder or any output, and is not forwarded if the server redirects to another host. If the variable is not
+set, the endpoint is reported as failing with the variable's name and nothing is sent.
+
+| finding | level | when |
+|---|---|---|
+| `openai.unreachable` | FAIL | an endpoint refused, timed out, answered with an error, or did not answer with a model list |
+| `openai.no_models` | WARN | an endpoint answered and lists no models |
+| `openai.slow` | INFO | `GET /models` took longer than 2000 ms; change it with `"openai_slow_ms": 3000` in `--ctx` |
+
+Confidence grading is the same as for Ollama. `model.not_loaded` counts a model an endpoint lists as present, because
+the OpenAI API cannot say what is resident. **Loaded-model state is Ollama-only:** `model.expiring` and
+`model.slow_ttft` (and `--ttft`) read only `ollama` endpoints, since `/v1/models` carries no unload time and a
+time-to-first-token probe would cost a generation on a server this tool did not start. `stack_health` and
+`stack_snapshot` over MCP include these nodes with no change to the tools.
+
+Tested against: a stdlib stub server on `127.0.0.1` that answers `GET /v1/models` in the shape those servers
+document (`tests/test_openai_nodes.py`). Also run once by hand, not in CI: a real
+LiteLLM proxy 1.106.2 on `127.0.0.1` (no master key; it listed its two configured models, and answers on `/v1/models`
+and `/models` alike). LM Studio, llama.cpp `llama-server` and vLLM: expected to work, not yet tested. The bearer token
+was exercised against the stub only; a LiteLLM proxy with a master key needs its database, which was not set up.
+
+The older form `{"kind": "openai", "endpoints": ["http://127.0.0.1:1234"]}` (the base URL without `/v1`) still works
+exactly as before, including its `ollama.unreachable` finding; use `openai` for new nodes.
 
 ### `doctor --fix ID` - run a finding's typed fix
 
@@ -396,6 +433,9 @@ By finding code - the same text `stack_explain` gives an agent:
 |---|---|---|
 | `node.unreachable` | the node did not answer within the deadline, or the collector raised | check the machine is on; if it is only slow, `--timeout 30` or `"_options": {"timeout_s": 30}` |
 | `ollama.unreachable` | the endpoint itself refused or timed out | `curl http://HOST:11434/api/version` from this machine; check the port and that Ollama listens on more than loopback (`OLLAMA_HOST`) |
+| `openai.unreachable` | an OpenAI-compatible endpoint refused, timed out, errored or did not list models | `curl http://HOST:PORT/v1/models` from this machine; the base URL should end in `/v1`; if the server needs a key, check the variable named by `api_key_env` is set where stack-guardian runs |
+| `openai.no_models` | the endpoint is up and lists no models | load a model in the server (LiteLLM: check the proxy config lists `model_name` entries) |
+| `openai.slow` | `GET /models` took over 2000 ms | check nothing else is loading a model or generating on that node; `"openai_slow_ms"` in `--ctx` moves the line |
 | `model.not_loaded` | `--ctx` expects a model that is not resident | load it with one short generate, or drop the expectation from `--ctx` |
 | `model.expiring` | a loaded model unloads within 60 s (INFO: `/api/ps` is missing, so it cannot be told) | send a request with a longer `keep_alive`, or set `OLLAMA_KEEP_ALIVE` on that node |
 | `model.slow_ttft` | a `--ttft` probe took over 2000 ms to the first token | check the model fits in VRAM, and that nothing else is generating on that GPU |
@@ -412,7 +452,8 @@ And by symptom:
 | you see | why |
 |---|---|
 | `stack-guardian: usage: ... nothing to probe` | a node in the nodes file has no endpoints, no `local: true` and no `tailnet_host`. It used to report `worst: OK`. |
-| `stack-guardian: usage: ... "kind": "openai"` | the node lists `endpoints` but is not marked as an OpenAI-compatible node |
+| `stack-guardian: usage: ... "kind": "openai"` | the node lists `endpoints` but is not marked as an OpenAI-compatible node; for a new node use `"openai": [".../v1"]` instead |
+| `stack-guardian: usage: ... "api_key_env"` | it takes the NAME of an environment variable (`"PROXY_API_KEY"`), not the key, and only on a node with an `openai` list |
 | every finding says `(LIKELY)` | confidence comes from history: run it twice against the same `--state` file |
 | the MCP server never says `VERIFIED` | by design, it grades against the saved history without adding to it; let the CLI or `--watch` build the history |
 | `doctor` exits `2` on the example snapshot | that is the point of the example: it fires every rule once |
@@ -420,8 +461,10 @@ And by symptom:
 ## What leaves the machine, and what is written
 
 - **Out:** HTTP(S) requests to exactly the base URLs in your nodes file (`/api/version`, `/api/tags`, `/api/ps`, or
-  `/v1/models` for an OpenAI-compatible node), and with `--ttft` one 1-token generation per loaded model. No
-  credentials are sent, redirects are followed, and nothing is sent anywhere else: no telemetry, no update check,
+  `GET <base>/models` for each `openai` URL, `/v1/models` for the older `kind` form), and with `--ttft` one 1-token
+  generation per loaded Ollama model. No credentials are sent unless a node sets `api_key_env`, in which case that
+  variable's value goes as a bearer token to that node's `openai` URLs only (and is dropped if a redirect leaves the
+  host); redirects are followed, and nothing is sent anywhere else: no telemetry, no update check,
   no analytics. `nvidia-smi` and `tailscale status --json` run locally.
 - **In:** nothing is downloaded or installed at run time. The package has no runtime dependencies.
 - **Written:** the state folder, `$STACK_GUARDIAN_STATE` or `~/.stack-guardian/`, created `0700`. It holds

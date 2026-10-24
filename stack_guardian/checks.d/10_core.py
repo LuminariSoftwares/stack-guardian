@@ -47,6 +47,8 @@ def model_not_loaded(snapshot, ctx):
         if not want or not node.get("reachable"):
             continue
         running = [(m or {}).get("name") for ep in (node.get("ollama") or []) for m in ((ep or {}).get("running") or [])]
+        # an OpenAI-compatible endpoint cannot say what is loaded, only what it lists: a listed id counts
+        running += [model for ep in (node.get("openai") or []) if not (ep or {}).get("error") for model in ((ep or {}).get("models") or [])]
         if want not in running:
             out.append(F.make_finding("model.not_loaded", "partial", "WARN", name,
                                       "expected model not loaded: %s wants %s" % (name, want),

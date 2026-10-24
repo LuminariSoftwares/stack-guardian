@@ -1,11 +1,31 @@
 # Changelog
 
-## Unreleased
+## stack-guardian 0.4.0 (2026-10-23)
 
+- **New: OpenAI-compatible nodes are first-class** (LM Studio, llama.cpp `llama-server`, vLLM, LiteLLM). A node takes
+  `"openai": ["http://HOST:PORT/v1"]` beside or instead of `"ollama"`, validated with the same shape rules and
+  errors. Each URL is probed with `GET <base>/models` under the existing single deadline, and the snapshot records
+  per endpoint whether it answered, the latency and the model ids (`node.openai[]`). Before, `{"openai": [...]}` was
+  a usage error ("nothing to probe"), and the older `"kind": "openai"` form reported a dead server as
+  `ollama.unreachable`, an empty server as `worst: OK`, and could not authenticate.
+- **New: `"api_key_env": "NAME"`** names the environment variable holding a node's bearer token. The value is sent
+  to that node's `openai` URLs only, dropped if a redirect leaves the host, and never written to the snapshot, the
+  state folder or any output; a pasted key in place of a name is refused without being echoed.
+- **New rules:** `openai.unreachable` (FAIL), `openai.no_models` (WARN) and `openai.slow` (INFO, `openai_slow_ms`,
+  default 2000), graded by run history like the Ollama rules, with `stack_explain` entries. `model.not_loaded`
+  counts a model an OpenAI endpoint lists. Loaded-model expiry (`model.expiring`) and `--ttft` stay Ollama-only.
+- Unchanged: the `"kind": "openai"` / `"endpoints"` form still works and means what it meant, `ollama.unreachable`
+  included. The MCP tools and their descriptions are unchanged (642 tokens, budget 650).
+  `dsh-stack-guardian` is unchanged.
 - **Releases are published by trusted publishing (OIDC).** Publishing a GitHub Release runs
   `.github/workflows/release.yml`: it fails unless the tag is `v` + the `pyproject.toml` version, runs the tests,
   builds and `twine check`s the sdist and wheel, and uploads them to PyPI with a short-lived credential and signed
   attestations. No stored PyPI token. Owner setup and release steps: `docs/RELEASING.md`.
+- **The release workflow asks PyPI first.** Its `verify` job (which also runs on a pull request that touches
+  `pyproject.toml`, as a dry run) now fails if the version in `pyproject.toml` is already on PyPI, and otherwise
+  prints `stack-guardian X.Y.Z is new on PyPI (latest there: ...)`. A PyPI that cannot be reached is a warning.
+- **Support kit:** bug and feature issue forms (blank issues off, a private security-reporting link), `SUPPORT.md` and
+  `CODE_OF_CONDUCT.md`, with a test that keeps them in place. Docs and repository metadata only.
 
 ## stack-guardian 0.3.0 (2026-10-21)
 

@@ -8,6 +8,6 @@ import sys
 
 from . import finding
 
-__version__ = "0.3.0"  # keep equal to pyproject.toml version
+__version__ = "0.4.0"  # keep equal to pyproject.toml version
 
 sys.modules.setdefault("sg_finding", finding)

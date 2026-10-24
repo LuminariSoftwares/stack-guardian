@@ -44,7 +44,7 @@ the setup is done, re-run that release with the manual run described under "If a
    (with the `v`) -> **Create new tag on publish**, target `main`. Use `vX.Y.Z` as the title, and paste that
    version's `CHANGELOG.md` section as the notes. Click **Publish release**.
 4. **Watch the release workflow**: **Actions** -> **release**. It runs `verify` (fails unless the tag equals
-   `v` + the `pyproject.toml` version, then runs the test suite), `build` (`python -m build` and
+   `v` + the `pyproject.toml` version or that version is already on PyPI, then runs the test suite), `build` (`python -m build` and
    `twine check --strict`), and `pypi` (the upload). If you set required reviewers, approve the `pypi` deployment
    when the run asks.
 5. **Verify on PyPI**: open `https://pypi.org/project/stack-guardian/X.Y.Z/` and check that the version is listed

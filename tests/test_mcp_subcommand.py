@@ -1,5 +1,6 @@
 """`stack-guardian mcp` starts the same MCP server as `stack-guardian-mcp` (the MCP Registry launches `uvx stack-guardian mcp`)."""
 import json
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -29,3 +30,5 @@ def test_versions_agree():
     from stack_guardian import mcp_server
     py = re.search(r'^version = "([^"]+)"', (Path(__file__).resolve().parent.parent / "pyproject.toml").read_text(encoding="utf-8"), re.M).group(1)
     assert mcp_server.VERSION == stack_guardian.__version__ == py
+    server = json.loads((Path(__file__).resolve().parent.parent / "server.json").read_text(encoding="utf-8"))
+    assert server["version"] == py and [p["version"] for p in server["packages"]] == [py], "server.json lags pyproject.toml"

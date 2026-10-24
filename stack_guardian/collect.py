@@ -7,6 +7,7 @@ tests never touch the network or the GPU.  A dead endpoint is data, never a cras
 """
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -35,9 +36,24 @@ def default_run(argv, timeout=15):
     return proc.stdout if proc.returncode == 0 else None
 
 
-def default_http_get(url, timeout=5):
-    """GET a URL and return (status, body text)."""
-    with urllib.request.urlopen(url, timeout=timeout) as resp:
+class _KeepCredentialsHome(urllib.request.HTTPRedirectHandler):
+    """Follow redirects, but never carry an Authorization header to a different host than the one it was meant for."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        new = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if new is not None and urllib.parse.urlsplit(newurl).netloc != urllib.parse.urlsplit(req.full_url).netloc:
+            new.headers.pop("Authorization", None)
+            new.unredirected_hdrs.pop("Authorization", None)
+        return new
+
+
+def default_http_get(url, timeout=5, headers=None):
+    """GET a URL and return (status, body text). headers (a bearer token, say) go only where redirects stay on-host."""
+    if not headers:
+        with urllib.request.urlopen(url, timeout=timeout) as resp:
+            return resp.status, resp.read().decode("utf-8", errors="replace")
+    opener = urllib.request.build_opener(_KeepCredentialsHome)
+    with opener.open(urllib.request.Request(url, headers=headers), timeout=timeout) as resp:  # noqa: S310 - the URL comes from the nodes file
         return resp.status, resp.read().decode("utf-8", errors="replace")
 
 
@@ -156,6 +172,50 @@ def collect_openai(url, http_get=None, clock=None):
     return out
 
 
+_MAX_MODELS = 200
+
+
+def collect_openai_models(url, http_get=None, clock=None, api_key_env=None, environ=None):
+    """Probe one OpenAI-compatible endpoint by its base URL (".../v1"): GET <base>/models.
+
+    Records whether it answered, how long that took and the model ids it lists; which of them are loaded is not
+    something the OpenAI API says, so there is no "running" list here (loaded-model rules are Ollama-only).
+    api_key_env names the environment variable holding a bearer token. Its value is sent as an Authorization header
+    and never stored: not in this dict, not in an error text.
+    """
+    http_get = http_get or default_http_get
+    clock = clock or time.perf_counter  # ms measurements: Windows' monotonic clock ticks every ~16 ms
+    base = url.rstrip("/")
+    out = {"url": base, "kind": "openai", "models": [], "latency_ms": None, "error": None}
+    try:
+        headers = {}
+        if api_key_env:
+            key = (environ if environ is not None else os.environ).get(api_key_env, "")
+            if not key.strip():
+                raise ValueError("api_key_env %s is not set in this environment" % api_key_env)
+            headers = {"Authorization": "Bearer " + key.strip()}
+        t0 = clock()
+        try:
+            status, body = http_get(base + "/models", **({"headers": headers} if headers else {}))
+        except urllib.error.HTTPError as exc:
+            if exc.code == 404 and not base.endswith("/v1"):
+                raise ValueError("HTTP Error 404 on %s/models; an OpenAI-compatible base URL usually ends in /v1" % base) from None
+            raise
+        out["latency_ms"] = int(round((clock() - t0) * 1000))
+        if status != 200:
+            raise ValueError("HTTP %s on /models" % status)
+        listed = json.loads(body)
+        if not isinstance(listed, dict) or not isinstance(listed.get("data"), list):
+            raise ValueError('/models did not answer with an OpenAI model list ({"data": [...]})')
+        ids = [m["id"][:200] for m in listed["data"] if isinstance(m, dict) and isinstance(m.get("id"), str) and m["id"]]
+        out["models"] = ids[:_MAX_MODELS]
+        if len(ids) > _MAX_MODELS:
+            out["models_total"] = len(ids)
+    except Exception as exc:
+        out["error"] = ("%s: %s" % (type(exc).__name__, exc))[:200]
+    return out
+
+
 def _why_missing(program, absent, failed, which=None):
     """Why a helper program gave nothing: it is not installed, or it ran and failed. The two need different fixes."""
     which = which or shutil.which
@@ -215,8 +275,12 @@ def snapshot(nodes, run=None, http_get=None, now=None, clock=None, timeout_s=10.
         else:
             ollama = [collect_ollama(u, http_get=http_get, clock=clock, ttft=ttft, post_first=post_first)
                       for u in (cfg.get("ollama") or [])]
-        ok = [o for o in ollama if o["error"] is None]
+        openai = [collect_openai_models(u, http_get=http_get, clock=clock, api_key_env=cfg.get("api_key_env"))
+                  for u in (cfg.get("openai") or [])]
+        ok = [o for o in ollama + openai if o["error"] is None]
         node = {"reachable": bool(ok), "latency_ms": ok[0]["latency_ms"] if ok else None, "ollama": ollama}
+        if "openai" in cfg:
+            node["openai"] = openai
         if cfg.get("local"):
             node["gpus"], gpu_error, unreadable = _collect_gpus(run=run)
             if gpu_error:
