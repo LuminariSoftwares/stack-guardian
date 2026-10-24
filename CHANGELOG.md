@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## stack-guardian 0.4.0 (2026-10-23)
 
 - **New: OpenAI-compatible nodes are first-class** (LM Studio, llama.cpp `llama-server`, vLLM, LiteLLM). A node takes
   `"openai": ["http://HOST:PORT/v1"]` beside or instead of `"ollama"`, validated with the same shape rules and

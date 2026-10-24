@@ -44,7 +44,7 @@ from a small rule inside the script. A test fails if this block and the script d
 reloaded looks broken for a few seconds, so one bad sample is reported as a likely problem and only what persists is
 reported as fact.
 
-Status: **0.3.0.** Standard library only, Python 3.11+, no runtime dependencies.
+Status: **0.4.0.** Standard library only, Python 3.11+, no runtime dependencies.
 
 One of four small, independent tools for people running local models: see [The guardian family](#the-guardian-family).
 

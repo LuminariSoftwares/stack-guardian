@@ -13,7 +13,7 @@ import time
 
 PROTOCOL = "2024-11-05"
 SERVER_NAME = "stack-guardian"
-VERSION = "0.3.0"  # keep equal to pyproject.toml version (this module stays package-free)
+VERSION = "0.4.0"  # keep equal to pyproject.toml version (this module stays package-free)
 EXPLAIN = {
     "check.crashed": {"summary": "A health rule raised an exception, so its own check did not run; this is a bug in the rule, not a verdict on the stack.",
                       "try": ["read the exception in the finding's evidence", "fix or remove the rule file in the checks folder"],
