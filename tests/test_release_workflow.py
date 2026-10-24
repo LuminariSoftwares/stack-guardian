@@ -95,3 +95,48 @@ def test_tag_check_without_a_tag_is_a_dry_run_that_names_the_would_be_tag():
     r = _tag_check()
     assert r.returncode == 0, r.stdout + r.stderr
     assert re.search(r"no tag .*would be v\d+\.\d+\.\d+", r.stdout)
+
+
+def _check_pypi(tmp_path, listed, tag="v1.2.3"):
+    """check_release_tag.main with a stand-in for PyPI's answer: a list of versions, or an exception to raise."""
+    import importlib.util
+    import io
+    from contextlib import redirect_stderr, redirect_stdout
+    spec = importlib.util.spec_from_file_location("check_release_tag", TAG_CHECK)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    py = tmp_path / "pyproject.toml"
+    py.write_text('[project]\nname = "x"\nversion = "1.2.3"\n', encoding="utf-8")
+
+    def fetch(name):
+        assert name == "x"
+        if isinstance(listed, Exception):
+            raise listed
+        return listed
+    out, err = io.StringIO(), io.StringIO()
+    with redirect_stdout(out), redirect_stderr(err):
+        code = mod.main(["--pyproject", str(py), "--check-pypi", *([tag] if tag else [])], fetch=fetch)
+    return code, out.getvalue(), err.getvalue()
+
+
+def test_check_pypi_says_a_new_version_is_new_and_refuses_one_already_there(tmp_path):
+    code, out, _ = _check_pypi(tmp_path, ["1.0.0", "1.2.2", "1.10.0"])
+    assert code == 0 and "x 1.2.3 is new on PyPI (latest there: 1.10.0)" in out
+    code, out, _ = _check_pypi(tmp_path, ["1.2.2"], tag="")  # the pull request dry run has no tag
+    assert code == 0 and "is new on PyPI" in out and "would be v1.2.3" in out
+    code, _, err = _check_pypi(tmp_path, ["1.2.2", "1.2.3"])
+    assert code == 1 and "already on PyPI" in err
+
+
+def test_check_pypi_tolerates_a_new_project_and_an_unreachable_pypi(tmp_path):
+    import urllib.error
+    not_found = urllib.error.HTTPError("https://pypi.org/pypi/x/json", 404, "Not Found", {}, None)
+    assert _check_pypi(tmp_path, not_found)[0] == 0 and "not listed there yet" in _check_pypi(tmp_path, not_found)[1]
+    code, out, _ = _check_pypi(tmp_path, OSError("no network"))
+    assert code == 0 and "could not ask PyPI" in out
+    assert _check_pypi(tmp_path, ["1.2.3"], tag="v9.9.9")[0] == 1  # a wrong tag still fails first
+
+
+def test_the_workflow_asks_pypi_before_building():
+    verify = "\n".join(_jobs(WORKFLOW.read_text(encoding="utf-8"))["verify"])
+    assert "check_release_tag.py --check-pypi" in verify

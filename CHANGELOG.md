@@ -21,6 +21,9 @@
   `.github/workflows/release.yml`: it fails unless the tag is `v` + the `pyproject.toml` version, runs the tests,
   builds and `twine check`s the sdist and wheel, and uploads them to PyPI with a short-lived credential and signed
   attestations. No stored PyPI token. Owner setup and release steps: `docs/RELEASING.md`.
+- **The release workflow asks PyPI first.** Its `verify` job (which also runs on a pull request that touches
+  `pyproject.toml`, as a dry run) now fails if the version in `pyproject.toml` is already on PyPI, and otherwise
+  prints `stack-guardian X.Y.Z is new on PyPI (latest there: ...)`. A PyPI that cannot be reached is a warning.
 - **Support kit:** bug and feature issue forms (blank issues off, a private security-reporting link), `SUPPORT.md` and
   `CODE_OF_CONDUCT.md`, with a test that keeps them in place. Docs and repository metadata only.
 
