@@ -34,7 +34,7 @@ def test_every_parameter_is_documented_with_an_example():
 
 
 def test_readme_status_matches_the_package_version():
-    assert "Status: **%s" % __version__ in README
+    assert "https://img.shields.io/pypi/v/stack-guardian" in README and "Status: active development -- [changelog](CHANGELOG.md)" in README  # P82 R4 (C12 a): the version lives in the PyPI badge, not a status sentence
     assert "0.1.0" not in README
 
 

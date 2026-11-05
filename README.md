@@ -4,58 +4,19 @@
 [![privacy](https://github.com/LuminariSoftwares/stack-guardian/actions/workflows/privacy.yml/badge.svg)](https://github.com/LuminariSoftwares/stack-guardian/actions/workflows/privacy.yml)
 [![XERJ Corpus Hub contributor](https://hub.xerj.org/contributors/LuminariSoftwares/badge.svg)](https://hub.xerj.org/contributors/LuminariSoftwares)
 [![stack-guardian MCP server – quality and maintenance score on Glama](https://glama.ai/mcp/servers/LuminariSoftwares/stack-guardian/badges/score.svg)](https://glama.ai/mcp/servers/LuminariSoftwares/stack-guardian)
+[![PyPI](https://img.shields.io/pypi/v/stack-guardian.svg)](https://pypi.org/project/stack-guardian/)
+
+Status: active development -- [changelog](CHANGELOG.md)
 
 mcp-name: io.github.LuminariSoftwares/stack-guardian
 
-A health doctor for a home AI stack. It collects a snapshot of your nodes (Ollama or OpenAI-compatible endpoints,
-loaded models, NVIDIA GPUs, tailnet peers), runs small Python rules against it, remembers the last runs, and reports
-findings with a confidence grade: one sample is at most `LIKELY`, the same finding twice in a row is `VERIFIED`. It
-exists because "the model is slow" on a multi-machine local stack has a dozen possible causes, and an agent or a person
-should get a graded, evidence-backed answer instead of a guess. A finding can carry a typed fix that you run on
-purpose, never automatically. It ships as a CLI, an MCP server for coding agents, a tiny HTTP endpoint with Prometheus
-metrics, and a DeepSeek Harness (DSH) plugin.
+**14 health checks, one command: the example stack exits 2 with 4 FAIL findings, on purpose.** <!-- c12 --> <!-- c13 -->
 
-Two runs against [examples/nodes.json](examples/nodes.json) with one state file:
+A health doctor for a home AI stack -- Ollama or OpenAI-compatible nodes, NVIDIA GPUs, tailnet peers -- with graded, evidence-backed findings.
 
-<!-- demo-report:start -->
-```
-# run 1
-FAIL ollama.unreachable [gpu-box-2]: 1 Ollama endpoint(s) do not answer: http://100.64.0.2:11434 (LIKELY)
-FAIL ollama.unreachable [home-server]: 1 Ollama endpoint(s) do not answer: http://100.64.0.3:11434 (LIKELY)
-FAIL tailnet.peer_offline [home-server]: tailnet peer offline: home-server (LIKELY)
-WARN model.expiring [gpu-box]: 1 loaded model(s) unload within 60s: qwen3:8b (LIKELY)
-OK   ollama.answering [gpu-box]: 1 endpoint(s) answer: http://127.0.0.1:11434
-worst: FAIL
-# run 2 (same state file)
-FAIL ollama.unreachable [gpu-box-2]: 1 Ollama endpoint(s) do not answer: http://100.64.0.2:11434 (VERIFIED)
-FAIL ollama.unreachable [home-server]: 1 Ollama endpoint(s) do not answer: http://100.64.0.3:11434 (VERIFIED)
-FAIL tailnet.peer_offline [home-server]: tailnet peer offline: home-server (VERIFIED)
-WARN model.expiring [gpu-box]: 1 loaded model(s) unload within 60s: qwen3:8b (VERIFIED)
-OK   ollama.answering [gpu-box]: 1 endpoint(s) answer: http://127.0.0.1:11434
-worst: FAIL
-```
-<!-- demo-report:end -->
+## Quick start (60 seconds)
 
-That is the real output of `python examples/demo_report.py`: the shipped collector and rules, with a stub Ollama on
-`127.0.0.1` answering for gpu-box, the two placeholder tailnet addresses never contacted, and sample `nvidia-smi` and
-`tailscale` output so it prints the same on any machine. The shipped rules only report problems; the `OK` line comes
-from a small rule inside the script. A test fails if this block and the script disagree.
-
-**Why the grade.** One run can make a finding at most `LIKELY`; the same finding on two runs in a row makes it
-`VERIFIED`; passing checks are not graded. On a home network a sleeping laptop, a Wi-Fi drop or a model being
-reloaded looks broken for a few seconds, so one bad sample is reported as a likely problem and only what persists is
-reported as fact.
-
-Status: **0.4.0.** Standard library only, Python 3.11+, no runtime dependencies.
-
-One of four small, independent tools for people running local models: see [The guardian family](#the-guardian-family).
-
-*Not affiliated with StackGuardian, the infrastructure-automation company. Same word, unrelated projects.*
-
-## Quick start (60 seconds, offline)
-
-**macOS / Linux**
-
+**macOS / Linux** (offline example run, Python 3.11+):
 ```
 pip install stack-guardian
 curl -LO https://raw.githubusercontent.com/LuminariSoftwares/stack-guardian/main/examples/snapshot.json
@@ -102,6 +63,68 @@ stack-guardian doctor --snapshot examples/snapshot.json --ctx examples/ctx.json
 python -m pytest -q
 ```
 
+## Proof
+
+```
+stack-guardian doctor --snapshot snapshot.json --ctx ctx.json
+```
+
+Run 2026-11-05 on stack-guardian 0.4.0 (<!-- c13 -->): the command exits `2`, prints `worst: FAIL`, and ends with:
+
+```
+stack-guardian: 8 finding(s) are LIKELY on one run: run again to confirm them as VERIFIED
+```
+
+14 findings on the example snapshot: 4 FAIL, 4 WARN, 6 INFO. The 14 checks that ship are counted from the installed package: `stack-guardian 0.4.0 checks loaded from installed package: 14` <!-- c12 -->
+
+Tests, 2026-11-05 (<!-- c15 -->): `171 passed in 61.00s (0:01:00)`
+
+Standard library only, Python 3.11+, no runtime dependencies. **GPUs: NVIDIA only, and only on the machine running stack-guardian.**
+
+A health doctor for a home AI stack. It collects a snapshot of your nodes (Ollama or OpenAI-compatible endpoints,
+loaded models, NVIDIA GPUs, tailnet peers), runs small Python rules against it, remembers the last runs, and reports
+findings with a confidence grade: one sample is at most `LIKELY`, the same finding twice in a row is `VERIFIED`. It
+exists because "the model is slow" on a multi-machine local stack has a dozen possible causes, and an agent or a person
+should get a graded, evidence-backed answer instead of a guess. A finding can carry a typed fix that you run on
+purpose, never automatically. It ships as a CLI, an MCP server for coding agents, a tiny HTTP endpoint with Prometheus
+metrics, and a DeepSeek Harness (DSH) plugin.
+
+Two runs against [examples/nodes.json](examples/nodes.json) with one state file:
+
+<!-- demo-report:start -->
+```
+# run 1
+FAIL ollama.unreachable [gpu-box-2]: 1 Ollama endpoint(s) do not answer: http://100.64.0.2:11434 (LIKELY)
+FAIL ollama.unreachable [home-server]: 1 Ollama endpoint(s) do not answer: http://100.64.0.3:11434 (LIKELY)
+FAIL tailnet.peer_offline [home-server]: tailnet peer offline: home-server (LIKELY)
+WARN model.expiring [gpu-box]: 1 loaded model(s) unload within 60s: qwen3:8b (LIKELY)
+OK   ollama.answering [gpu-box]: 1 endpoint(s) answer: http://127.0.0.1:11434
+worst: FAIL
+# run 2 (same state file)
+FAIL ollama.unreachable [gpu-box-2]: 1 Ollama endpoint(s) do not answer: http://100.64.0.2:11434 (VERIFIED)
+FAIL ollama.unreachable [home-server]: 1 Ollama endpoint(s) do not answer: http://100.64.0.3:11434 (VERIFIED)
+FAIL tailnet.peer_offline [home-server]: tailnet peer offline: home-server (VERIFIED)
+WARN model.expiring [gpu-box]: 1 loaded model(s) unload within 60s: qwen3:8b (VERIFIED)
+OK   ollama.answering [gpu-box]: 1 endpoint(s) answer: http://127.0.0.1:11434
+worst: FAIL
+```
+<!-- demo-report:end -->
+
+That is the real output of `python examples/demo_report.py`: the shipped collector and rules, with a stub Ollama on
+`127.0.0.1` answering for gpu-box, the two placeholder tailnet addresses never contacted, and sample `nvidia-smi` and
+`tailscale` output so it prints the same on any machine. The shipped rules only report problems; the `OK` line comes
+from a small rule inside the script. A test fails if this block and the script disagree.
+
+**Why the grade.** One run can make a finding at most `LIKELY`; the same finding on two runs in a row makes it
+`VERIFIED`; passing checks are not graded. On a home network a sleeping laptop, a Wi-Fi drop or a model being
+reloaded looks broken for a few seconds, so one bad sample is reported as a likely problem and only what persists is
+reported as fact.
+
+Standard library only, Python 3.11+, no runtime dependencies.
+
+One of four small, independent tools for people running local models: see [The guardian family](#the-guardian-family).
+
+*Not affiliated with StackGuardian, the infrastructure-automation company. Same word, unrelated projects.*
 ## Architecture
 
 ```mermaid
@@ -546,6 +569,8 @@ Four small MIT-licensed tools for people running local models. Each does one job
 | [tool-guardian](https://github.com/LuminariSoftwares/tool-guardian) | Routes many MCP servers through a few tools, so their definitions stop filling the context window. |
 | [stack-guardian](https://github.com/LuminariSoftwares/stack-guardian) | Is my home AI stack healthy? Ollama / OpenAI-compatible nodes, NVIDIA GPUs and Tailscale peers, with a confidence grade on every finding. |
 <!-- guardian-family:end -->
+
+One of four free, MIT-licensed guardians for people running local models, each answering one question from the outside: tool-guardian (what do my tools cost the window?), context-guardian (will this session hit the limit?), stack-guardian (is my stack healthy?), code-guardian (is this code safe to run?).
 
 ## License
 

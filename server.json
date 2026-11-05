@@ -2,7 +2,7 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.LuminariSoftwares/stack-guardian",
   "title": "Stack Guardian",
-  "description": "Health doctor for a home AI stack: Ollama nodes, GPUs and tailnet, with graded confidence.",
+  "description": "14 checks, one command, graded findings. A health doctor for a home AI stack.",
   "repository": {"url": "https://github.com/LuminariSoftwares/stack-guardian", "source": "github"},
   "version": "0.4.0",
   "packages": [
@@ -15,7 +15,7 @@
       "transport": {"type": "stdio"},
       "packageArguments": [{"type": "positional", "value": "mcp"}],
       "environmentVariables": [
-        {"name": "STACK_GUARDIAN_NODES", "description": "Path to your nodes JSON file (see examples/nodes.json)", "isRequired": true, "format": "filepath"}
+        {"name": "STACK_GUARDIAN_NODES", "description": "14 checks, one command, graded findings. A health doctor for a home AI stack.", "isRequired": true, "format": "filepath"}
       ]
     }
   ]
