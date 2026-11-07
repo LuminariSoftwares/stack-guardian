@@ -14,6 +14,8 @@ mcp-name: io.github.LuminariSoftwares/stack-guardian
 
 A health doctor for a home AI stack -- Ollama or OpenAI-compatible nodes, NVIDIA GPUs, tailnet peers -- with graded, evidence-backed findings.
 
+<p align="center"><a href="docs/demo_poster.png"><img alt="stack-guardian promo video: 14 checks, one command; the example stack exits 2 with 4 FAIL findings on purpose" src="docs/demo_poster.png" width="720"></a></p>
+
 ## Quick start (60 seconds)
 
 **macOS / Linux** (offline example run, Python 3.11+):
