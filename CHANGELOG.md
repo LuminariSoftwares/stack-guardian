@@ -1,5 +1,11 @@
 # Changelog
 
+## stack-guardian 0.4.1 (2026-11-11)
+
+- **Registry and package pages.** `server.json` leads with the result ("14 checks, one command, graded findings. A health doctor for a home AI stack."), and the `STACK_GUARDIAN_NODES` variable carries its own description again ("Path to your nodes JSON file (see examples/nodes.json)"); a test now fails if a variable carries the server description. The README published with the package is the current one: the result and a 60-second quick start first.
+- **No code changes.** The installed package is the same as 0.4.0 apart from its version.
+- **Versions.** `pyproject.toml`, `__version__`, the MCP server and both `version` fields of `server.json` read 0.4.1. The npm plugin `dsh-stack-guardian` is unchanged and not part of this release.
+
 ## stack-guardian 0.4.0 (2026-10-23)
 
 - **New: OpenAI-compatible nodes are first-class** (LM Studio, llama.cpp `llama-server`, vLLM, LiteLLM). A node takes
