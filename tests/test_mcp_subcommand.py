@@ -32,3 +32,13 @@ def test_versions_agree():
     assert mcp_server.VERSION == stack_guardian.__version__ == py
     server = json.loads((Path(__file__).resolve().parent.parent / "server.json").read_text(encoding="utf-8"))
     assert server["version"] == py and [p["version"] for p in server["packages"]] == [py], "server.json lags pyproject.toml"
+
+
+def test_server_json_env_descriptions_describe_the_variable():
+    server = json.loads((Path(__file__).resolve().parent.parent / "server.json").read_text(encoding="utf-8"))
+    envs = [e for p in server["packages"] for e in p.get("environmentVariables", [])]
+    assert envs, "server.json declares no environment variables"
+    for e in envs:
+        assert e["description"] != server["description"], "%s carries the server description, not its own" % e["name"]
+    nodes = {e["name"]: e for e in envs}["STACK_GUARDIAN_NODES"]
+    assert "nodes" in nodes["description"].lower() and nodes["format"] == "filepath"
