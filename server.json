@@ -15,7 +15,7 @@
       "transport": {"type": "stdio"},
       "packageArguments": [{"type": "positional", "value": "mcp"}],
       "environmentVariables": [
-        {"name": "STACK_GUARDIAN_NODES", "description": "14 checks, one command, graded findings. A health doctor for a home AI stack.", "isRequired": true, "format": "filepath"}
+        {"name": "STACK_GUARDIAN_NODES", "description": "Path to your nodes JSON file (see examples/nodes.json)", "isRequired": true, "format": "filepath"}
       ]
     }
   ]
